@@ -14,8 +14,7 @@ npm-debug.log*
 vite.config.js
 vite.config.d.ts
 
-# 抖音抓取素材与产物（体积大 / 含登录态残留）——仅保留 *.md 文档
-douyin_analysis/*
-!douyin_analysis/*.md
+# 抖音抓取素材、分析文档与产物（不属于代码，且体积大 / 含登录态残留）
+douyin_analysis/
 docs/secuids.json
 secuids.json
