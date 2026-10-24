@@ -1,0 +1,137 @@
+/* §4.5 壳层视觉语言：深空配色 Token + 磨砂玻璃卡 + 中英双语标注体系
+   全站基准；实验台内部主题 A/B 不影响此处 */
+
+:root {
+  /* 深空底色 */
+  --c-bg-1: #0b1220;
+  --c-bg-2: #0e1626;
+  --c-nebula: #1b2c4a;
+
+  /* 强调色 */
+  --c-accent: #4da6ff;      /* 主强调 青蓝 */
+  --c-accent-2: #5eead4;    /* 辅强调 青 */
+
+  /* 文字 */
+  --c-text: #f5f7fa;
+  --c-text-dim: #8ca0b8;
+  --c-text-faint: #5a6b82;
+
+  /* 玻璃卡 */
+  --glass-bg: rgba(255, 255, 255, 0.06);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-blur: 20px;
+  --radius-card: 20px;
+  --radius-pill: 999px;
+
+  /* 矢量色（§4.4 主题 A 矢量色，壳层也复用） */
+  --vec-force: #ff5a5a;
+  --vec-velocity: #5eea7b;
+  --vec-accel: #ffb14d;
+  --vec-field: #b98bff;
+  --vec-mag: #4da6ff;
+
+  /* 语义色 */
+  --c-success: #5eea7b;
+  --c-warn: #ffb14d;
+  --c-error: #ff5a5a;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Hiragino Sans GB", system-ui, sans-serif;
+  color: var(--c-text);
+  background:
+    radial-gradient(1200px 800px at 20% 10%, rgba(77, 166, 255, 0.10), transparent 60%),
+    radial-gradient(1000px 700px at 85% 90%, rgba(94, 234, 212, 0.08), transparent 60%),
+    linear-gradient(180deg, var(--c-bg-1), var(--c-bg-2));
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* 星云粒子层（极轻量，纯 CSS 伪元素，无外部资源，满足离线） */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, rgba(255,255,255,0.6) 50%, transparent),
+    radial-gradient(1px 1px at 33% 71%, rgba(255,255,255,0.4) 50%, transparent),
+    radial-gradient(1.5px 1.5px at 58% 18%, rgba(77,166,255,0.5) 50%, transparent),
+    radial-gradient(1px 1px at 71% 64%, rgba(255,255,255,0.5) 50%, transparent),
+    radial-gradient(1px 1px at 88% 33%, rgba(94,234,212,0.4) 50%, transparent),
+    radial-gradient(1px 1px at 47% 88%, rgba(255,255,255,0.4) 50%, transparent);
+  background-size: 100% 100%;
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 0;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.en {
+  font-family: "Georgia", "Times New Roman", serif;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+.en-up {
+  font-family: "Inter", system-ui, sans-serif;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-weight: 600;
+  font-size: 0.78em;
+  color: var(--c-accent);
+}
+
+/* 磨砂玻璃卡 */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+  transition: border-color 0.25s ease, transform 0.25s ease, background 0.25s ease;
+}
+.glass:hover {
+  border-color: rgba(77, 166, 255, 0.55);
+  transform: translateY(-2px);
+}
+
+/* 胶囊按钮 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 26px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--c-accent);
+  color: var(--c-text);
+  background: linear-gradient(180deg, rgba(77,166,255,0.18), rgba(77,166,255,0.06));
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+.pill:hover { background: linear-gradient(180deg, rgba(77,166,255,0.32), rgba(77,166,255,0.14)); box-shadow: 0 8px 30px rgba(77,166,255,0.25); transform: translateY(-1px); }
+.pill:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.grow { animation: grow 0.5s ease both; }
+@keyframes grow { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+
+.fade-in { animation: fade 0.6s ease both; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 窄屏：实验台主舞台与面板纵向堆叠（§4.1） */
+@media (max-width: 860px) {
+  .lab-mainrow { grid-template-columns: 1fr !important; }
+  .lab-mainrow > div:first-child { min-height: 320px !important; }
+}

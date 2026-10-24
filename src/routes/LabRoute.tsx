@@ -1,0 +1,50 @@
+// 实验台路由：按 labId 懒加载，未实现的实验给占位（设计说明 §6.3 分阶段）
+import { lazy, Suspense } from 'react';
+import { useParams } from 'react-router-dom';
+import { labById } from '@/content/curriculum';
+
+const L1 = lazy(() => import('@/labs/L1'));
+const L2 = lazy(() => import('@/labs/L2'));
+const L3 = lazy(() => import('@/labs/L3'));
+const L4 = lazy(() => import('@/labs/L4'));
+const L5 = lazy(() => import('@/labs/L5'));
+const L6 = lazy(() => import('@/labs/L6'));
+const L7 = lazy(() => import('@/labs/L7'));
+
+export function LabRoute() {
+  const { labId = '' } = useParams();
+  const lab = labById(labId);
+
+  if (!lab) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--c-text-dim)' }}>实验不存在</div>;
+
+  const impl: Record<string, React.LazyExoticComponent<() => JSX.Element>> = {
+    L1: L1 as any,
+    L2: L2 as any,
+    L3: L3 as any,
+    L4: L4 as any,
+    L5: L5 as any,
+    L6: L6 as any,
+    L7: L7 as any,
+  };
+  const Comp = impl[labId];
+
+  return (
+    <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', color: 'var(--c-text-dim)' }}>加载 3D 场景…</div>}>
+      {Comp ? <Comp /> : <Placeholder lab={lab} />}
+    </Suspense>
+  );
+}
+
+function Placeholder({ lab }: { lab: NonNullable<ReturnType<typeof labById>> }) {
+  return (
+    <div style={{ padding: '60px 28px', textAlign: 'center', position: 'relative', zIndex: 1 }}>
+      <div className="en-up" style={{ color: 'var(--c-accent)' }}>COMING SOON</div>
+      <h1 style={{ fontSize: 30, fontWeight: 800, marginTop: 10 }}>{lab.name}</h1>
+      <p style={{ color: 'var(--c-text-dim)', marginTop: 12, maxWidth: 560, margin: '12px auto 0' }}>{lab.goal}</p>
+      <div className="glass" style={{ display: 'inline-block', marginTop: 28, padding: '14px 22px', borderRadius: 14 }}>
+        <span className="en" style={{ color: 'var(--c-text)' }}>{lab.formula}</span>
+        <span style={{ color: 'var(--c-text-faint)', marginLeft: 12 }}>· 该实验将在 P1/P2 阶段实现</span>
+      </div>
+    </div>
+  );
+}

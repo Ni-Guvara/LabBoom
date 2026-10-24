@@ -1,0 +1,21 @@
+node_modules
+dist
+dist-ssr
+*.local
+.codebuddy
+.workbuddy
+.vscode
+.DS_Store
+*.log
+npm-debug.log*
+
+# tsc -b（composite）生成的构建残留
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# 抖音抓取素材与产物（体积大 / 含登录态残留）——仅保留 *.md 文档
+douyin_analysis/*
+!douyin_analysis/*.md
+docs/secuids.json
+secuids.json
