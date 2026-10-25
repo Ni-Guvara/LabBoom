@@ -1,125 +1,263 @@
-// L1 实验：装配→测量→结论。气垫导轨匀加速，纸带点迹算瞬时速度，v-t 拟合斜率= a
+// L1 实验：研究匀变速直线运动（气垫导轨 + 纸带 + 光电门）
+// 三态：布置（垫片高度）→ 运行（纸带动画）→ 分析（逐差法 / v-t 拟合 / 误差）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as echarts from 'echarts';
-import { SceneHost } from '@/engine/SceneHost';
-import { buildL1Scene, l1Position, l1Velocity, type L1State } from './scene';
+import { SceneHost, type SceneApi } from '@/engine/SceneHost';
+import {
+  buildL1Scene, buildSamples, theoryAccel, GATE_OFFSET, RAIL_LEN, START_U, TRAVEL,
+  type L1Params, type L1State,
+} from './scene';
 import { LabFrame } from '@/labs/_template/LabFrame';
-import { Slider, Panel, DataTable } from '@/primitives/Primitives';
+import { Slider, Panel } from '@/primitives/Primitives';
 import { linearFit, downloadCSV } from '@/utils/fit';
+import { countingPoints, tapeVelocities, gateReadings, sampleAt, duration, type Sample } from '@/engine/physics/kinematics';
 import { useProgressStore } from '@/store/progress';
 
-const DT = 0.1;
+type Stage = 'setup' | 'run' | 'analyze';
+const STAGES: Stage[] = ['setup', 'run', 'analyze'];
+const STAGE_LABEL: Record<Stage, string> = { setup: '布置', run: '运行', analyze: '分析' };
+const T = 0.1; // 计数点间隔（5 × 0.02 s）
+
+interface Row { key: string; n: string; t: number; x: number; v: number; src: string }
+interface Rec {
+  id: number; h: number; flagWidth: number;
+  aFit: number; aDiff: number; aTheory: number; r2: number;
+  rows: Row[]; pts: [number, number][]; gateV: number | null; blockTime: number | null;
+  travel: number;
+}
+
+/** 逐差法：( (x4+x5+x6) − (x1+x2+x3) ) / 9T² */
+function diffMethod(samples: Sample[]): number {
+  const xs = [1, 2, 3, 4, 5, 6].map((k) => sampleAt(samples, k * T).x);
+  return (xs[3] + xs[4] + xs[5] - xs[0] - xs[1] - xs[2]) / (9 * T * T);
+}
+
+function buildRecord(p: L1Params, samples: Sample[], id: number): Rec {
+  const cps = countingPoints(samples, 5, 0.02).filter((s) => s.t > 0.05 && s.t <= 1.4);
+  const vs = tapeVelocities(cps, T);
+  const gates = gateReadings(samples, [{ id: 'G1', x: GATE_OFFSET, flagWidth: p.flagWidth }]);
+  const rows: Row[] = cps.map((s, i) => ({ key: `c${i}`, n: String(i + 1), t: s.t, x: s.x, v: vs[i], src: '纸带·中间时刻' }));
+  if (gates[0]) rows.push({ key: 'gate', n: '门', t: gates[0].tIn, x: GATE_OFFSET, v: gates[0].v, src: '光电门 v = d/Δt' });
+  const fit = linearFit(cps.map((s, i) => ({ x: s.t, y: vs[i] })));
+  return {
+    id, h: p.h, flagWidth: p.flagWidth,
+    aFit: fit?.a ?? 0, r2: fit?.r2 ?? 0, aDiff: diffMethod(samples), aTheory: theoryAccel(p),
+    rows, pts: cps.map((s, i) => [s.t, vs[i]] as [number, number]),
+    gateV: gates[0]?.v ?? null, blockTime: gates[0]?.blockTime ?? null,
+    travel: TRAVEL,
+  };
+}
 
 export default function L1Lab() {
-  const [a, setA] = useState(0.5);
-  const [v0, setV0] = useState(0.2);
-  const [t, setT] = useState(0);
-  const [running, setRunning] = useState(false);
-  const [points, setPoints] = useState<{ t: number; x: number; v: number }[]>([]);
-  const [step, setStep] = useState(0);
+  const [stage, setStage] = useState<Stage>('setup');
+  const [h, setH] = useState(0.03);
+  const [flagWidth, setFlag] = useState(0.02);
+  const [speed, setSpeed] = useState(1);
+  const [paused, setPaused] = useState(false);
+  const [stepToken, setStepToken] = useState(0);
+  const [runId, setRunId] = useState(0);
+  const [recs, setRecs] = useState<Rec[]>([]);
+  const [sel, setSel] = useState<string | null>(null);
 
-  const stateRef = useRef<L1State>({ a, v0, t, running, points });
-  stateRef.current = { a, v0, t, running, points };
+  const params: L1Params = { h, flagWidth };
+  const sim = useMemo(() => buildSamples({ h, flagWidth }), [h, flagWidth]);
+  const tEnd = duration(sim);
 
   const markStep = useProgressStore((s) => s.markStep);
   const recordLab = useProgressStore((s) => s.recordLab);
   const completeLab = useProgressStore((s) => s.completeLab);
   const passQuiz = useProgressStore((s) => s.passQuiz);
 
+  const readout = useRef<HTMLSpanElement>(null);
+  const stateRef = useRef<L1State | null>(null);
+  const commitRef = useRef<() => void>(() => {});
+
+  stateRef.current = {
+    ...params, stage, speed, paused, stepToken, runId, samples: sim,
+    onProgress: (t) => { if (readout.current) readout.current.textContent = `${t.toFixed(2)} s`; },
+    onFinish: () => commitRef.current(),
+  };
+
+  commitRef.current = () => {
+    setRecs((r) => [...r, buildRecord(params, sim, r.length + 1)]);
+    setSel('c1');
+    setStage('analyze');
+  };
+
+  useEffect(() => { markStep('L1', STAGE_LABEL[stage]); }, [stage, markStep]);
+
+  const start = () => {
+    setPaused(false); setStepToken(0); setRunId((r) => r + 1); setSel(null); setStage('run');
+    if (readout.current) readout.current.textContent = '0.00 s';
+  };
+
+  const setup = (api: SceneApi) => buildL1Scene(api, () => stateRef.current!);
+
+  const chartEl = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const cur = recs.length ? recs[recs.length - 1] : null;
+
   useEffect(() => {
-    if (!running) return;
-    let raf = 0; let last = performance.now();
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      const dt = (now - last) / 1000; last = now;
-      setT((prev) => {
-        const nt = prev + dt;
-        const idx = Math.floor(nt / DT);
-        const prevIdx = Math.floor(prev / DT);
-        if (idx > prevIdx && nt < 8) {
-          const vx = l1Velocity(stateRef.current, idx * DT);
-          const x = l1Position({ ...stateRef.current, t: idx * DT });
-          setPoints((ps) => [...ps, { t: +(idx * DT).toFixed(2), x: +x.toFixed(3), v: +vx.toFixed(3) }]);
-        }
-        if (nt >= 8) { setRunning(false); return prev; }
-        return nt;
-      });
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [running]);
-
-  const setup = (api: any) => buildL1Scene(api, () => stateRef.current);
-
-  const fit = useMemo(() => linearFit(points.map((p) => ({ x: p.t, y: p.v }))), [points]);
-
-  const chartRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!chartRef.current) return;
-    const chart = echarts.init(chartRef.current);
-    const line = fit ? points.map((p) => [p.t, +(fit.a * p.t + fit.b).toFixed(3)]) : [];
+    const el = chartEl.current;
+    if (!el) return;
+    const chart = chartRef.current ?? echarts.init(el);
+    chartRef.current = chart;
+    if (!cur) { chart.clear(); return; }
+    const fit = linearFit(cur.pts.map(([t, v]) => ({ x: t, y: v })));
+    const line = fit ? cur.pts.map(([t]) => [t, +(fit.a * t + fit.b).toFixed(4)]) : [];
+    const axis = { axisLabel: { color: '#8ca0b8', fontSize: 11 }, axisLine: { lineStyle: { color: '#5a6b82' } }, nameTextStyle: { color: '#8ca0b8', fontSize: 11 } };
     chart.setOption({
       backgroundColor: 'transparent',
-      grid: { left: 48, right: 16, top: 20, bottom: 36 },
-      xAxis: { name: 't/s', nameTextStyle: { color: '#8ca0b8' }, axisLabel: { color: '#8ca0b8' }, axisLine: { lineStyle: { color: '#5a6b82' } }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } } },
-      yAxis: { name: 'v/(m/s)', nameTextStyle: { color: '#8ca0b8' }, axisLabel: { color: '#8ca0b8' }, axisLine: { lineStyle: { color: '#5a6b82' } }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } } },
+      grid: { left: 46, right: 14, top: 26, bottom: 34 },
+      xAxis: { type: 'value', name: 't/s', min: 0, ...axis },
+      yAxis: { type: 'value', name: 'v/(m·s⁻¹)', nameLocation: 'middle', nameGap: 38, splitNumber: 4, min: 0, ...axis, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } } },
       series: [
-        { type: 'scatter', data: points.map((p) => [p.t, p.v]), symbolSize: 9, itemStyle: { color: '#5eead4' } },
-        { type: 'line', data: line, showSymbol: false, lineStyle: { color: '#4da6ff', width: 2 } },
+        { type: 'scatter', data: cur.pts, symbolSize: 8, itemStyle: { color: '#5eead4' }, name: '纸带测速' },
+        { type: 'line', data: line, showSymbol: false, lineStyle: { color: '#4da6ff', width: 2 }, name: 'v-t 拟合' },
       ],
-    });
-    return () => chart.dispose();
-  }, [points, fit]);
+    }, true);
+  }, [cur]);
 
-  const reset = () => { setT(0); setPoints([]); setRunning(false); };
-  const onStep = (i: number) => { setStep(i); markStep('L1', ['装配', '测量', '结论'][i]); };
-  const submit = (ok: boolean) => {
-    if (ok) {
-      recordLab({ labId: 'L1', timestamp: Date.now(), variables: { a, v0 }, dataRows: { t: points.map((p) => p.t), v: points.map((p) => p.v) }, conclusionCorrect: true });
-      completeLab('L1', true);
-      passQuiz('M2');
-    }
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !cur || !sel) return;
+    const idx = cur.rows.findIndex((r) => r.key === sel);
+    if (idx >= 0 && idx < cur.pts.length) chart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: idx });
+  }, [sel, cur]);
+
+  useEffect(() => () => { chartRef.current?.dispose(); chartRef.current = null; }, []);
+
+  const relErr = cur ? Math.abs(cur.aFit - cur.aTheory) / Math.max(1e-6, cur.aTheory) : 1;
+  const diffErr = cur ? Math.abs(cur.aDiff - cur.aTheory) / Math.max(1e-6, cur.aTheory) : 1;
+  const pass = !!cur && relErr < 0.05 && diffErr < 0.05;
+
+  const submit = () => {
+    if (!pass || !cur) return;
+    recordLab({
+      labId: 'L1', timestamp: Date.now(), variables: { h, flagWidth },
+      dataRows: { t: cur.pts.map((p) => p[0]), v: cur.pts.map((p) => p[1]) }, conclusionCorrect: true,
+    });
+    completeLab('L1', true);
+    passQuiz('M2');
   };
+
+  const exportCSV = () => {
+    if (!cur) return;
+    const meta: (number | string)[][] = [
+      ['实验名', '研究匀变速直线运动'],
+      ['器材', '气垫导轨 1.20 m / 滑行器 155 g / J0203 打点计时器 0.02 s / 光电门'],
+      ['垫片高度 h/m', cur.h, '挡光片 d/m', cur.flagWidth, '导轨长 L/m', RAIL_LEN],
+      ['a 拟合', +cur.aFit.toFixed(4), 'a 逐差法', +cur.aDiff.toFixed(4), 'a 理论', +cur.aTheory.toFixed(4)],
+      [],
+    ];
+    const rows = cur.rows.map((r) => [cur.id, r.n, +r.t.toFixed(3), +r.x.toFixed(4), +r.v.toFixed(4), r.src]);
+    downloadCSV(`L1-第${cur.id}组.csv`, ['组次', '事件', 't/s', 'x/m', 'v/(m·s⁻¹)', '来源'], [...meta, ...rows]);
+  };
+
+  const stepIdx = STAGES.indexOf(stage);
 
   return (
     <LabFrame
-      labId="L1" step={step} onStep={onStep}
-      toolbar={<button className="pill" style={{ padding: '6px 14px', fontSize: 12 }} onClick={() => { setRunning((r) => !r); if (step < 1) onStep(1); }}>{running ? '⏸ 暂停' : '▶ 播放'}</button>}
+      labId="L1"
+      step={stepIdx}
+      onStep={(i) => { if (i <= stepIdx) setStage(STAGES[i]); }}
+      toolbar={
+        <>
+          <span className="glass" style={{ padding: '6px 12px', borderRadius: 999, fontSize: 12 }}>当前：{STAGE_LABEL[stage]}</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[0.25, 1, 4].map((v) => (
+              <button key={v} className="pill" onClick={() => setSpeed(v)} style={{ padding: '6px 12px', fontSize: 12, opacity: speed === v ? 1 : 0.55 }}>{v}×</button>
+            ))}
+            {stage === 'run' && (
+              <>
+                <button className="pill" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => setPaused((p) => !p)}>{paused ? '继续' : '暂停'}</button>
+                <button className="pill" style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => setStepToken((t) => t + 1)}>单步 0.02s</button>
+              </>
+            )}
+          </div>
+        </>
+      }
       stage={<SceneHost setup={setup} />}
       panel={
-        <Panel title="参数面板 · 时间操控" right={<span className="en" style={{ color: 'var(--c-text-faint)', fontSize: 13 }}>v = v0 + at</span>}>
-          <Slider label="加速度 a" value={a} min={0} max={2} step={0.05} unit=" m/s²" onChange={(v) => { setA(v); reset(); }} />
-          <Slider label="初速度 v0" value={v0} min={0} max={1} step={0.05} unit=" m/s" onChange={(v) => { setV0(v); reset(); }} />
-          <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.8 }}>
-            当前时间 t = <b style={{ color: 'var(--c-accent)' }}>{t.toFixed(2)}</b> s<br />
-            小车位置 x = <b style={{ color: 'var(--c-accent-2)' }}>{l1Position(stateRef.current).toFixed(2)}</b> m<br />
-            瞬时速度 v = <b style={{ color: 'var(--c-accent-2)' }}>{l1Velocity(stateRef.current, t).toFixed(2)}</b> m/s
-          </div>
-          <button className="pill" style={{ alignSelf: 'flex-start', padding: '8px 18px', fontSize: 13 }} onClick={reset}>↺ 重置</button>
-        </Panel>
+        stage === 'setup' ? (
+          <Panel title="布置 · 垫片与纸带" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>a = g·h/L</span>}>
+            <Slider label="垫片高度 h（抬高左端）" value={h} min={0.01} max={0.06} step={0.005} unit=" m" onChange={setH} />
+            <Slider label="挡光片宽度 d" value={flagWidth} min={0.01} max={0.05} step={0.01} unit=" m" onChange={setFlag} />
+            <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
+              倾角 sinθ = h/L = <b>{(h / RAIL_LEN).toFixed(4)}</b><br />
+              理论加速度 a = <b style={{ color: 'var(--c-accent-2)' }}>{theoryAccel(params).toFixed(3)}</b> m/s²<br />
+              行程 {TRAVEL.toFixed(2)} m · 计时器 0.02 s 一点（5 点取 1 个计数点）
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--c-text-faint)', lineHeight: 1.7 }}>
+              纸带已从计时器针口引出，点距 = 0.02 s 内的位移；分析页可用逐差法与 v-t 拟合两种方法求 a。
+            </div>
+            <button className="pill" style={{ alignSelf: 'flex-start', padding: '9px 20px', fontSize: 13 }} onClick={start}>释放滑行器 →</button>
+          </Panel>
+        ) : stage === 'run' ? (
+          <Panel title="运行 · 器材已锁定">
+            <div style={{ fontSize: 14, color: 'var(--c-text-dim)', lineHeight: 2 }}>
+              模拟时间：<span ref={readout} style={{ color: 'var(--c-accent)' }}>0.00 s</span><br />
+              预计到时 {tEnd.toFixed(2)} s · 起点 x₀ = {START_U.toFixed(2)} m
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态不可拖动器材；纸带点随位移逐点打印。</div>
+          </Panel>
+        ) : (
+          <Panel title={`分析 · 第 ${cur?.id ?? 1} 组`}>
+            <div style={{ fontSize: 13.5, color: 'var(--c-text-dim)', lineHeight: 2 }}>
+              v-t 拟合 a = <b style={{ color: 'var(--c-accent)' }}>{cur?.aFit.toFixed(3)}</b> m/s²（R²={cur?.r2.toFixed(4)}）<br />
+              逐差法 a = <b style={{ color: 'var(--c-accent)' }}>{cur?.aDiff.toFixed(3)}</b> m/s² · 相对误差 {(diffErr * 100).toFixed(2)}%<br />
+              理论 a = <b style={{ color: 'var(--c-accent-2)' }}>{cur?.aTheory.toFixed(3)}</b> m/s²<br />
+              光电门 v = {cur?.gateV?.toFixed(3) ?? '—'} m/s，Δt = {cur?.blockTime ? (cur.blockTime * 1000).toFixed(2) : '—'} ms
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="pill" style={{ padding: '8px 16px', fontSize: 12.5 }} onClick={() => setStage('setup')}>再测一组</button>
+              <button className="pill" style={{ padding: '8px 16px', fontSize: 12.5 }} onClick={exportCSV}>导出 CSV</button>
+            </div>
+          </Panel>
+        )
       }
       dataArea={
-        <Panel title="实时数据 · v-t 图像" right={<button onClick={() => downloadCSV('L1_vt.csv', ['t/s', 'v/(m/s)'], points.map((p) => [p.t, p.v]))} style={{ background: 'transparent', border: '1px solid var(--glass-border)', color: 'var(--c-text-dim)', borderRadius: 8, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>导出 CSV</button>}>
-          <DataTable columns={['t/s', 'x/m', 'v/(m/s)']} rows={points.map((p) => [p.t, p.x, p.v])} />
-          <div ref={chartRef} style={{ width: '100%', height: 200 }} />
-          {fit && (
-            <div style={{ fontSize: 12.5, color: 'var(--c-text-dim)' }}>
-              一键拟合：斜率 a ≈ <b style={{ color: 'var(--c-accent)' }}>{fit.a.toFixed(2)}</b> m/s²，截距 v0 ≈ {fit.b.toFixed(2)} m/s，R² ≈ {fit.r2.toFixed(3)}
+        <Panel title="数据 · 纸带事件记录" right={<span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>共 {cur?.rows.length ?? 0} 行</span>}>
+          {cur ? (
+            <div style={{ maxHeight: 190, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ color: 'var(--c-text-faint)', textAlign: 'left' }}>
+                    <th style={th}>#</th><th style={th}>t/s</th><th style={th}>x/m</th><th style={th}>v/(m·s⁻¹)</th><th style={th}>来源</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cur.rows.map((r) => (
+                    <tr key={r.key} onClick={() => setSel(r.key)} style={{ cursor: 'pointer', background: sel === r.key ? 'rgba(77,166,255,0.16)' : undefined }}>
+                      <td style={td}>{r.n}</td>
+                      <td style={td}>{r.t.toFixed(2)}</td>
+                      <td style={td}>{r.x.toFixed(3)}</td>
+                      <td style={{ ...td, color: r.src.startsWith('光电门') ? 'var(--c-accent-2)' : 'var(--c-accent)' }}>{r.v.toFixed(3)}</td>
+                      <td style={{ ...td, color: 'var(--c-text-faint)', fontSize: 11.5 }}>{r.src}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
+          ) : <div style={{ fontSize: 12.5, color: 'var(--c-text-faint)' }}>尚无数据：先在布置页释放滑行器。</div>}
+          <div ref={chartEl} style={{ width: '100%', height: 200 }} />
+          <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>点表格行可在 v-t 图上高亮对应点。</div>
         </Panel>
       }
       conclusion={
-        <Panel title="结论校验 · 速度与时间的关系">
-          <div style={{ fontSize: 14, color: 'var(--c-text-dim)', lineHeight: 1.8 }}>
-            v-t 图拟合得 <span className="en">v = {fit ? fit.a.toFixed(2) : '?'}·t + {fit ? fit.b.toFixed(2) : '?'}</span>。匀变速直线运动速度与时间成什么关系？
+        <Panel title="结论校验 · 匀变速直线运动">
+          <div style={{ fontSize: 13.5, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
+            v-t 图应为直线，斜率即加速度；且逐差法 a 与 g·h/L 一致（误差 &lt; 5%）。
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button className="pill" style={{ padding: '8px 18px', fontSize: 13 }} onClick={() => submit(true)}>线性关系 v = v0 + at</button>
-            <button className="pill" style={{ padding: '8px 18px', fontSize: 13 }} onClick={() => submit(false)}>非线性</button>
+          <div style={{ fontSize: 13, color: pass ? 'var(--c-accent-2)' : 'var(--c-warn)' }}>
+            {cur ? `当前判定：${pass ? '通过' : '未通过（检查垫片高度或数据点）'}` : '尚未采集数据'}
           </div>
+          <button className="pill" disabled={!pass} style={{ padding: '8px 18px', fontSize: 13, opacity: pass ? 1 : 0.5 }} onClick={submit}>验证：匀变速直线运动</button>
         </Panel>
       }
     />
   );
 }
+
+const th: React.CSSProperties = { padding: '4px 6px', fontWeight: 500, borderBottom: '1px solid rgba(255,255,255,0.08)' };
+const td: React.CSSProperties = { padding: '4px 6px', borderBottom: '1px solid rgba(255,255,255,0.04)', fontVariantNumeric: 'tabular-nums' };

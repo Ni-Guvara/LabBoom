@@ -47,6 +47,8 @@ export function LabFrame({ labId, step, onStep, stage, panel, dataArea, conclusi
         <div style={stageWrap}>
           {toolbar && <div style={toolbarStyle}>{toolbar}</div>}
           {stage}
+          {/* 标注默认不显示：把光标停在某个器材上满 2 s 才亮出它的名称/读数 */}
+          <div className="en-up" style={hoverHint}>悬停器材 2 s 显示标注</div>
         </div>
         <div style={sideCol}>{panel}{dataArea}</div>
       </div>
@@ -63,4 +65,5 @@ const badge: React.CSSProperties = { padding: '6px 12px', borderRadius: 999, dis
 const mainRow: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 12, minHeight: 460 };
 const stageWrap: React.CSSProperties = { position: 'relative', minHeight: 460, borderRadius: 16, overflow: 'hidden' };
 const toolbarStyle: React.CSSProperties = { position: 'absolute', top: 10, left: 10, zIndex: 5, display: 'flex', gap: 8 };
+const hoverHint: React.CSSProperties = { position: 'absolute', right: 12, bottom: 10, zIndex: 4, fontSize: 10.5, letterSpacing: 1, color: 'var(--c-text-faint)', opacity: 0.6, pointerEvents: 'none' };
 const sideCol: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12 };

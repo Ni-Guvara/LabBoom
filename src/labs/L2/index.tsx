@@ -4,7 +4,7 @@ import * as echarts from 'echarts';
 import { SceneHost } from '@/engine/SceneHost';
 import { buildSpringScene, springExtension, type SpringState } from './scene';
 import { LabFrame } from '@/labs/_template/LabFrame';
-import { Slider, ViewToggle, AnchorToggle, Panel, DataTable } from '@/primitives/Primitives';
+import { Slider, ViewToggle, Panel, DataTable } from '@/primitives/Primitives';
 import { useProgressStore } from '@/store/progress';
 
 interface Row { n: number; F: number; x: number }
@@ -15,7 +15,6 @@ export default function L2Lab() {
   const massPerHook = 0.1;
   const g = 9.8;
   const [view, setView] = useState<'macro' | 'micro'>('macro');
-  const [showAnchor, setShowAnchor] = useState(true);
   const [step, setStep] = useState(0);
   const [rows, setRows] = useState<Row[]>([]);
   const [conclusion, setConclusion] = useState<boolean | null>(null);
@@ -92,8 +91,8 @@ export default function L2Lab() {
       labId="L2"
       step={step}
       onStep={onFinishStep}
-      toolbar={<><ViewToggle value={view} onChange={setView} /><AnchorToggle value={showAnchor} onChange={setShowAnchor} /></>}
-      stage={<SceneHost setup={setup} dark={view === 'micro'} />}
+      toolbar={<ViewToggle value={view} onChange={setView} />}
+      stage={<SceneHost setup={setup} />}
       panel={
         <Panel title="参数面板 · 探究变量" right={<span className="en" style={{ color: 'var(--c-text-faint)', fontSize: 13 }}>F = kx</span>}>
           <Slider label="挂钩码数 n" value={hooks} min={0} max={6} step={1} unit=" 个" onChange={(v) => { setHooks(v); if (step < 1) onFinishStep(1); }} />

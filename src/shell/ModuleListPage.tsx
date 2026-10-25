@@ -68,9 +68,10 @@ export function ModuleListPage() {
               style={{ ...moduleCard, opacity: unlocked ? 1 : 0.65 }}
               onClick={() => nav(unlocked ? `/lab/${lab.id}` : `/cabin/${ch.id}`)}
             >
-              {/* 封面：3D 场景缩略图占位（实际取该实验 three.js 场景截图） */}
+              {/* 封面：该实验 three.js 场景的真实截图（scripts/capture-covers.mjs 生成），
+                  还没有影棚渲染的关卡回退到线稿风格占位，不拿半成品截图充数 */}
               <div style={cover(lab.category)}>
-                <CoverGlyph category={lab.category} formula={lab.formula} />
+                <LabCover id={lab.id} category={lab.category} formula={lab.formula} />
               </div>
               <div style={infoBar}>
                 <div className="en-up" style={{ color: 'var(--c-accent-2)' }}>
@@ -93,19 +94,44 @@ export function ModuleListPage() {
   );
 }
 
-// 封面缩略图占位：按分类给一个 3D 风格的纯 CSS 图形 + 公式
+/** 已生成影棚截图的关卡（scripts/capture-covers.mjs 产出物，新增后在此登记） */
+const HAS_COVER = new Set(['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7']);
+
+function LabCover({ id, category, formula }: { id: string; category: string; formula: string }) {
+  if (!HAS_COVER.has(id)) return <CoverGlyph category={category} formula={formula} />;
+  return (
+    <img
+      src={`${import.meta.env.BASE_URL}covers/${id}.jpg`}
+      alt=""
+      loading="lazy"
+      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+    />
+  );
+}
+
+// 无截图关卡的回退封面：按分类配色的坐标纸线稿，视觉上明确是"示意图"而非成品渲染
 function CoverGlyph({ category, formula }: { category: string; formula: string }) {
   const hue = category === 'mechanics' ? '#4da6ff' : category === 'electromagnetism' ? '#b98bff' : '#5eead4';
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', display: 'grid', placeItems: 'center' }}>
-      <div style={{ width: 70, height: 70, borderRadius: 14, background: `linear-gradient(135deg, ${hue}44, ${hue}11)`, border: `1px solid ${hue}66`, boxShadow: `0 10px 40px ${hue}33` }} />
-      <span className="en" style={{ position: 'absolute', fontSize: 15, color: '#fff', textShadow: '0 2px 10px rgba(0,0,0,0.6)' }}>{formula}</span>
+    <div
+      style={{
+        position: 'relative', width: '100%', height: '100%', display: 'grid', placeItems: 'center',
+        backgroundImage: `linear-gradient(${hue}1f 1px, transparent 1px), linear-gradient(90deg, ${hue}1f 1px, transparent 1px)`,
+        backgroundSize: '22px 22px',
+      }}
+    >
+      <div style={{ textAlign: 'center' }}>
+        <div className="en" style={{ fontSize: 15, color: '#fff', textShadow: '0 2px 10px rgba(0,0,0,0.7)' }}>{formula}</div>
+        <div className="en-up" style={{ fontSize: 9.5, letterSpacing: 1.6, color: 'var(--c-text-faint)', marginTop: 10 }}>
+          schematic · 影棚渲染待补
+        </div>
+      </div>
     </div>
   );
 }
 
 const cover = (_cat: string): React.CSSProperties => ({
-  height: 150, borderRadius: '14px 14px 0 0',
+  height: 150, borderRadius: '14px 14px 0 0', overflow: 'hidden',
   background: 'radial-gradient(120% 80% at 50% 20%, rgba(77,166,255,0.16), rgba(11,18,32,0.6))',
   borderBottom: '1px solid var(--glass-border)',
 });

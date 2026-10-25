@@ -10,6 +10,11 @@ const L4 = lazy(() => import('@/labs/L4'));
 const L5 = lazy(() => import('@/labs/L5'));
 const L6 = lazy(() => import('@/labs/L6'));
 const L7 = lazy(() => import('@/labs/L7'));
+const L8 = lazy(() => import('@/labs/L8'));
+const L9 = lazy(() => import('@/labs/L9'));
+const L10 = lazy(() => import('@/labs/L10'));
+const L11 = lazy(() => import('@/labs/L11'));
+const L12 = lazy(() => import('@/labs/L12'));
 
 export function LabRoute() {
   const { labId = '' } = useParams();
@@ -25,6 +30,11 @@ export function LabRoute() {
     L5: L5 as any,
     L6: L6 as any,
     L7: L7 as any,
+    L8: L8 as any,
+    L9: L9 as any,
+    L10: L10 as any,
+    L11: L11 as any,
+    L12: L12 as any,
   };
   const Comp = impl[labId];
 
