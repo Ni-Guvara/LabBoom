@@ -112,7 +112,9 @@ function addTicks(
 /** 实验桌台面（所有器具的接触阴影落在这里） */
 export function tableTop(w = 2.6, d = 1.2, y = 0): THREE.Group {
   const g = new THREE.Group();
-  const top = solid(rb(w, 0.04, d, 0.004), mat('bench'));
+  // 台面不要带微观粗糙度贴图：256 px 噪点铺到 2.4 m 台面上会被放大成一颗颗
+  // 直径 2 mm 的深色圆点，学生一眼看上去就是「打点打在桌子上了」。
+  const top = solid(rb(w, 0.04, d, 0.004), mat('bench', { roughness: 0.72 }));
   top.position.y = y - 0.02;
   top.receiveShadow = true;
   g.add(top);
@@ -297,13 +299,15 @@ export function photogate(gap = 0.05, postHeight = 0.3): THREE.Group {
 
   const head = new THREE.Group();
   head.position.y = postHeight + 0.008;
-  const yoke = solid(rb(0.014, 0.05, gap + 0.024, 0.003), mat('plasticGray'));
-  yoke.position.y = 0.025;
+  // 顶梁必须留在「挡光片顶上」以上，两臂从梁两端垂下：中间是真正通透的光口。
+  // 原来是一整块实心方料，挡光片根本穿不过去 —— 远看像光电门，其实测不到东西。
+  const yoke = solid(rb(0.014, 0.022, gap + 0.024, 0.003), mat('plasticGray'));
+  yoke.position.y = 0.039;
   head.add(yoke);
   // 两臂（减去中间的槽，用两块板表达）
   for (const sz of [-1, 1]) {
-    const arm = solid(rb(0.016, 0.014, 0.012, 0.002), mat('plasticGray'));
-    arm.position.set(0, 0.006, sz * (gap / 2 + 0.006));
+    const arm = solid(rb(0.016, 0.03, 0.012, 0.002), mat('plasticGray'));
+    arm.position.set(0, 0.014, sz * (gap / 2 + 0.006));
     head.add(arm);
     const eye = solid(new THREE.SphereGeometry(0.0022, 10, 8), mat('plasticRed', { emissive: 0x551100 }));
     eye.position.set(0.008, 0.006, sz * (gap / 2 + 0.004));
@@ -330,6 +334,9 @@ export function photogate(gap = 0.05, postHeight = 0.3): THREE.Group {
   }
   g.userData.spec = { name: '光电门', size: [0.02, 0.36, gap + 0.03] } as PartSpec;
   g.userData.gap = gap;
+  // 头部是独立子组：真机用 C 形夹卡在导轨侧面、横臂把镜头臂送到轨道上方，
+  // 调用方需要能把头部挪到别处（见 L1/scene.ts），所以把引用暴露出来。
+  g.userData.head = head;
   g.userData.setReadout = (text: string) => plate.setText(text);
   return g;
 }

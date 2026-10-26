@@ -134,26 +134,33 @@ function gateUnit(gap = 0.05): THREE.Group {
 }
 
 export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void {
-  const { scene, camera, addAnchor, setAnchorText, onTick, setTarget } = api;
+  const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
   // 取景在文件末尾统一按器材包围盒计算（fitCamera）
 
   const table = tableTop(2.4, 2.4);
   scene.add(table);
 
+  // 整套器材放进一个 rig：布置阶段可以整体挪位置，运行阶段锁定
+  const rig = new THREE.Group();
+  rig.name = 'rig';
+  scene.add(rig);
+  // 铁架台 + 重锤 + 两个光电门整体可摆（运行态锁定：重锤已按轨迹下落，位置不能再变）
+  draggable(rig, { plane: 'floor', canDrag: () => getState().stage === 'setup' });
+
   // 铁架台 + 横臂 + 释放夹（夹口正对重锤吊环，锤体悬在夹口下方）
   const stand = retortStand(0.95);
   stand.position.set(-0.2, 0, 0);
-  scene.add(stand);
+  rig.add(stand);
   addAnchor(stand, '铁架台 0.95 m');
 
   const clamp = releaseClamp();
   clamp.position.set(0, RELEASE_Y + 0.05, 0);
-  scene.add(clamp);
+  rig.add(clamp);
   addAnchor(clamp, '电磁释放夹');
 
   const arm = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.01, 0.012), mat('steel', { color: 0x9aa4ad }));
   arm.position.set(-0.13, RELEASE_Y + 0.065, 0);
-  scene.add(arm);
+  rig.add(arm);
 
   const hammerLabel = (st: L7State) =>
     `重锤 m = ${(st.mass * 1000).toFixed(0)} g · 遮光片 d = ${(st.shadeWidth * 1000).toFixed(1)} mm`;
@@ -163,18 +170,18 @@ export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void
   const init = getState();
   let hammer = plumb(init.mass, init.shadeWidth);
   hammer.position.set(0, RELEASE_Y, 0);
-  scene.add(hammer);
+  rig.add(hammer);
   let hammerAnchor = addAnchor(hammer, hammerLabel(init));
 
   // 光电门：整组只建一次，改高度就是 position.y —— 拖动滑块立刻能看到门在动
   const gate1 = gateUnit();
   gate1.position.y = GATE1_Y;
-  scene.add(gate1);
+  rig.add(gate1);
   const gate1Anchor = addAnchor(gate1, gateLabel(init, GATE1_Y, 1), undefined, new THREE.Vector3(0, 0.1, 0));
 
   const gate2 = gateUnit();
   gate2.position.y = init.gate2Y;
-  scene.add(gate2);
+  rig.add(gate2);
   const gate2Anchor = addAnchor(gate2, gateLabel(init, init.gate2Y, 2), undefined, new THREE.Vector3(0, 0.1, 0));
 
   const setReadout = (g: THREE.Group, text: string) => (g.userData.setReadout as (t: string) => void)(text);
@@ -198,10 +205,10 @@ export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void
     // 布置参数一变，器材立刻跟着变（原来只在点"释放"后才生效，看起来像"没反应"）
     gate2.position.y = st.gate2Y;
     if ((hammer.userData.mass as number) !== st.mass || Math.abs((hammer.userData.shadeWidth as number) - st.shadeWidth) > 1e-9) {
-      scene.remove(hammer);
+      rig.remove(hammer);
       hammer = plumb(st.mass, st.shadeWidth);
       hammer.position.set(0, RELEASE_Y, 0);
-      scene.add(hammer);
+      rig.add(hammer);
       hammerAnchor = addAnchor(hammer, hammerLabel(st));
     }
 

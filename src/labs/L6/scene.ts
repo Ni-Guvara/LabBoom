@@ -35,32 +35,39 @@ export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void
   const table = tableTop(2.4, 2.4);
   scene.add(table);
 
+  // 整套器材放进一个 rig：布置阶段可以整体挪位置，运行阶段锁定
+  const rig = new THREE.Group();
+  rig.name = 'rig';
+  scene.add(rig);
+  // 向心力演示仪是一台整机：底座、转盘、曲柄、测力弹簧必须一起动
+  draggable(rig, { plane: 'floor', canDrag: () => getState().stage === 'setup' });
+
   // 底座 + 立轴 + 转盘
   const base = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.03, 0.18), mat('plasticBlack'));
   base.position.y = 0.015;
-  scene.add(base);
+  rig.add(base);
   // 主光在右前上方，转盘的影子落到背后被自己挡住 → 补一块接触阴影，否则整台仪器像浮在台面上
   const ao = contactShadow(0.15, 0.5);
   ao.position.set(0, 0.002, 0.01);
-  scene.add(ao);
+  rig.add(ao);
 
   const PLATE_Y = 0.046; // 盘面高度
   const DISC_R = 0.16;
   const disc = new THREE.Mesh(new THREE.CylinderGeometry(DISC_R, DISC_R, 0.008, 64), mat('aluminumMatte'));
   disc.position.y = PLATE_Y;
   disc.castShadow = true;
-  scene.add(disc);
+  rig.add(disc);
   const discAnchor = addAnchor(disc, '转盘 r_max = 160 mm', undefined, new THREE.Vector3(0, 0.062, 0));
 
   // 外缘滚花环（真实转盘边缘是翻边 + 滚花）
   const rimRing = new THREE.Mesh(new THREE.TorusGeometry(DISC_R - 0.0015, 0.0018, 8, 96), mat('steel', { color: 0x9aa4ad }));
   rimRing.rotation.x = Math.PI / 2;
   rimRing.position.y = PLATE_Y + 0.004;
-  scene.add(rimRing);
+  rig.add(rimRing);
 
   // 随盘旋转：径向滑槽 + 毫米刻度 + 配重 + 游标
   const rotor = new THREE.Group();
-  scene.add(rotor);
+  rig.add(rotor);
   const slot = new THREE.Mesh(new THREE.BoxGeometry(DISC_R - 0.028, 0.0025, 0.011), mat('plasticBlack', { roughness: 0.8 }));
   slot.position.set(0.014 + (DISC_R - 0.028) / 2, PLATE_Y + 0.0045, 0);
   rotor.add(slot);
@@ -82,27 +89,27 @@ export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void
   const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.024, 0.014, 28), mat('aluminum'));
   hub.position.y = PLATE_Y + 0.007;
   hub.castShadow = true;
-  scene.add(hub);
+  rig.add(hub);
   const setScrew = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.007, 12), mat('steel', { color: 0x8b949e }));
   setScrew.rotation.z = Math.PI / 2;
   setScrew.position.set(0.024, PLATE_Y + 0.008, 0);
-  scene.add(setScrew);
+  rig.add(setScrew);
 
   const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.06, 14), mat('steel'));
   shaft.position.y = 0.02;
-  scene.add(shaft);
+  rig.add(shaft);
 
   // 中心数显：实时显示径向拉力 F = mω²r（器材面板读数，不走 2 s 悬停）
   const dialPost = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.036, 10), mat('steel', { color: 0x9aa4ad }));
   dialPost.position.set(0, PLATE_Y + 0.03, 0.012);
-  scene.add(dialPost);
+  rig.add(dialPost);
   const dialBox = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.022, 0.008), mat('plasticBlack'));
   dialBox.position.set(0, PLATE_Y + 0.052, 0.012);
   dialBox.castShadow = true;
-  scene.add(dialBox);
+  rig.add(dialBox);
   const forcePlate = textPlate(0.049, 0.017, 'F = -- N', { fontSize: 92 });
   forcePlate.mesh.position.set(0, PLATE_Y + 0.052, 0.0165);
-  scene.add(forcePlate.mesh);
+  rig.add(forcePlate.mesh);
   const dialAnchor = addAnchor(dialBox, '径向测力计 F = mω²r', undefined, new THREE.Vector3(0, 0.014, 0.01));
 
   // 手柄：摇臂伸出转盘外，握柄竖直
@@ -114,14 +121,13 @@ export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void
   knob.position.set(-0.155, 0.015, 0);
   crank.add(knob);
   crank.position.set(0, 0.052, 0);
-  scene.add(crank);
-  draggable(crank);
+  rig.add(crank);
 
   // ---------- 小球 + 螺旋弹簧 ----------
   const BALL_R = 0.012;
   const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 18), mat('steel', { roughness: 0.22 }));
   ball.castShadow = true;
-  scene.add(ball);
+  rig.add(ball);
   const ballAnchor = addAnchor(ball, '小球 m = 100 g');
 
   // 原来这里是一根 φ6 的实心"钢棍"，看着不像器材；真实向心力演示器是
@@ -138,7 +144,7 @@ export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void
     ring.castShadow = true;
     spring.add(ring);
   }
-  scene.add(spring);
+  rig.add(spring);
 
   const UP = new THREE.Vector3(0, 1, 0);
   const dir = new THREE.Vector3();

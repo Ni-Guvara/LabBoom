@@ -52,6 +52,8 @@ export function buildSamples(p: L4Params): Sample[] {
 
 export function buildL4Scene(api: SceneApi, getState: () => L4State): () => void {
   const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
+  /** 只有布置阶段允许挪器材：跑起来以后计时器/光电门/滑轮的位置都参与读数了 */
+  const setupOnly = () => getState().stage === 'setup';
   // 取景在文件末尾统一按器材包围盒计算（fitCamera）
 
   // ---------- 台面与木板 ----------
@@ -73,7 +75,7 @@ export function buildL4Scene(api: SceneApi, getState: () => L4State): () => void
   const timer = tickerTimer();
   timer.position.set(-0.44, BOARD_TOP, 0);
   scene.add(timer);
-  draggable(timer);
+  draggable(timer, { plane: 'floor', canDrag: setupOnly });
   const timerAnchor = addAnchor(timer, '电磁打点计时器 50 Hz · 纸带 0.02 s/点');
 
   const needleX = -0.41;
@@ -106,7 +108,7 @@ export function buildL4Scene(api: SceneApi, getState: () => L4State): () => void
   const gate = photogate(0.05, 0.085);
   gate.position.set(START_X + GATE_OFFSET, BOARD_TOP, 0);
   scene.add(gate);
-  draggable(gate);
+  draggable(gate, { plane: 'floor', canDrag: setupOnly });
   addAnchor(gate, '光电门');
 
   // ---------- 定滑轮 + 砝码 ----------
@@ -115,7 +117,7 @@ export function buildL4Scene(api: SceneApi, getState: () => L4State): () => void
   const pul = pulley();
   pul.position.set(PULLEY_X, 0, 0);
   scene.add(pul);
-  draggable(pul);
+  draggable(pul, { plane: 'floor', canDrag: setupOnly });
   addAnchor(pul, '定滑轮', undefined, new THREE.Vector3(0, 0.11, 0));
   // 砝码盘标注放在盘下方一点，和定滑轮错开一行
   const weights = weightStack([0.05]);
@@ -124,7 +126,7 @@ export function buildL4Scene(api: SceneApi, getState: () => L4State): () => void
   // 盘心正对轮缘右侧切点，竖直段细线自然垂到盘上，不会斜成一条"断线"
   weights.position.set(PULLEY_X + 0.025, DISH_Y0, 0);
   scene.add(weights);
-  draggable(weights);
+  draggable(weights, { plane: 'floor', canDrag: setupOnly });
   const weightsAnchor = addAnchor(weights, '砝码盘 m0', undefined, new THREE.Vector3(0.01, 0.03, 0.03));
 
   // 细线加粗到 φ3.2 mm：原来 0.9 mm 在 0.5 m 视野里不到 1 px，远看就是"线断了"

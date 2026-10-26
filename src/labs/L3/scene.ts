@@ -79,7 +79,7 @@ export function buildL3Scene(api: SceneApi, getState: () => L3State): () => void
     const s = dynamometer(5, SCALE_LEN);
     s.traverse((o) => { o.castShadow = true; });
     scene.add(s);
-    draggable(s);
+    draggable(s, { plane: 'floor', canDrag: () => getState().stage === 'setup' });
     return s;
   });
   const scaleAnchors = [

@@ -56,10 +56,17 @@ export function strobeDots(p: L5Params): Dot[] {
 }
 
 export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void {
-  const { scene, camera, addAnchor, setAnchorText, onTick, setTarget } = api;
+  const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
 
   const table = tableTop(2.4, 2.4);
   scene.add(table);
+
+  // 整套器材放进一个 rig：布置阶段可以整体挪位置，运行阶段锁定
+  const rig = new THREE.Group();
+  rig.name = 'rig';
+  scene.add(rig);
+  // 斜槽 + 钢球 + 描迹板是一套：布置阶段整体可摆，抛出点与落点一起挪，轨迹才是自洽的
+  draggable(rig, { plane: 'floor', canDrag: () => getState().stage === 'setup' });
 
   // ---------- 斜槽：倾斜段 + 末端水平导出段 ----------
   // 平抛的前提是"离槽速度水平"。原来末端就是 35° 斜坡，球出槽是斜向下飞的，
@@ -118,13 +125,13 @@ export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void
   legAt(-0.05);
   legAt(-EXIT - 0.16);
   legAt(-EXIT - 0.34);
-  scene.add(ramp);
+  rig.add(ramp);
   const rampAnchor = addAnchor(ramp, '斜槽（末端水平段 160 mm）');
 
   // ---------- 钢球 ----------
   const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 18), mat('steel', { roughness: 0.22 }));
   ball.castShadow = true;
-  scene.add(ball);
+  rig.add(ball);
   const ballAnchor = addAnchor(ball, '钢球 φ16 mm');
 
   // ---------- 竖直描迹板（球后侧，5 cm 方格） ----------
@@ -157,7 +164,7 @@ export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void
     pts.push(new THREE.Vector3(BOARD_X0, y, zLine), new THREE.Vector3(BOARD_X0 + BOARD_W, y, zLine));
   }
   boardGrp.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
-  scene.add(boardGrp);
+  rig.add(boardGrp);
   addAnchor(panel, '描迹板（5 cm 方格）');
 
   // 取景：斜槽 + 描迹板一起入画。俯角放小一点（描迹板是竖直的，太俯就看不见方格）
@@ -167,7 +174,7 @@ export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void
   const dotGeo = new THREE.SphereGeometry(0.005, 10, 8);
   const dotMat = new THREE.MeshStandardMaterial({ color: 0xd93b3b, roughness: 0.7 });
   let dots: THREE.Mesh[] = [];
-  const clearDots = () => { for (const d of dots) scene.remove(d); dots = []; };
+  const clearDots = () => { for (const d of dots) rig.remove(d); dots = []; };
 
   let simT = 0;
   let lastRun = -1;
@@ -217,7 +224,7 @@ export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void
       const tt = shot * STROBE;
       const d = new THREE.Mesh(dotGeo, dotMat);
       d.position.set(v0 * tt, Math.max(BALL_R, Y0 - 0.5 * G * tt * tt), 0.004);
-      scene.add(d);
+      rig.add(d);
       dots.push(d);
       shot++;
     }

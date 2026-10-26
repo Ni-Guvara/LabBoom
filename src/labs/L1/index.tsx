@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 import { SceneHost, type SceneApi } from '@/engine/SceneHost';
 import {
-  buildL1Scene, buildSamples, theoryAccel, GATE_OFFSET, RAIL_LEN, START_U, TRAVEL,
+  buildL1Scene, buildSamples, theoryAccel, gateOffset, GATE_U, RAIL_LEN, START_U, TRAVEL,
   type L1Params, type L1State,
 } from './scene';
 import { LabFrame } from '@/labs/_template/LabFrame';
@@ -26,18 +26,26 @@ interface Rec {
   travel: number;
 }
 
-/** 逐差法：( (x4+x5+x6) − (x1+x2+x3) ) / 9T² */
+/**
+ * 逐差法：( (Δ4+Δ5+Δ6) − (Δ1+Δ2+Δ3) ) / 9T²
+ *
+ * 注意 Δ 是「相邻计数点之间的位移」。原来直接把 6 个计数点的**位置**相加，
+ * 等于把 s1..s6 当作位移用，结果恒为真实值的 3.5 倍（实测 0.858 vs 0.245，
+ * 相对误差 250%）。位置与位移的差别只在 s0 那一项，漏掉就整体错位。
+ */
 function diffMethod(samples: Sample[]): number {
-  const xs = [1, 2, 3, 4, 5, 6].map((k) => sampleAt(samples, k * T).x);
-  return (xs[3] + xs[4] + xs[5] - xs[0] - xs[1] - xs[2]) / (9 * T * T);
+  const s = [0, 1, 2, 3, 4, 5, 6].map((k) => sampleAt(samples, k * T).x);
+  const d = [1, 2, 3, 4, 5, 6].map((k) => s[k] - s[k - 1]);
+  return (d[3] + d[4] + d[5] - (d[0] + d[1] + d[2])) / (9 * T * T);
 }
 
-function buildRecord(p: L1Params, samples: Sample[], id: number): Rec {
+function buildRecord(p: L1Params, samples: Sample[], gateU: number, id: number): Rec {
   const cps = countingPoints(samples, 5, 0.02).filter((s) => s.t > 0.05 && s.t <= 1.4);
   const vs = tapeVelocities(cps, T);
-  const gates = gateReadings(samples, [{ id: 'G1', x: GATE_OFFSET, flagWidth: p.flagWidth }]);
+  const offset = gateOffset(p.flagWidth, gateU);
+  const gates = gateReadings(samples, [{ id: 'G1', x: offset, flagWidth: p.flagWidth }]);
   const rows: Row[] = cps.map((s, i) => ({ key: `c${i}`, n: String(i + 1), t: s.t, x: s.x, v: vs[i], src: '纸带·中间时刻' }));
-  if (gates[0]) rows.push({ key: 'gate', n: '门', t: gates[0].tIn, x: GATE_OFFSET, v: gates[0].v, src: '光电门 v = d/Δt' });
+  if (gates[0]) rows.push({ key: 'gate', n: '门', t: gates[0].tIn, x: offset, v: gates[0].v, src: '光电门 v = d/Δt' });
   const fit = linearFit(cps.map((s, i) => ({ x: s.t, y: vs[i] })));
   return {
     id, h: p.h, flagWidth: p.flagWidth,
@@ -52,6 +60,7 @@ export default function L1Lab() {
   const [stage, setStage] = useState<Stage>('setup');
   const [h, setH] = useState(0.03);
   const [flagWidth, setFlag] = useState(0.02);
+  const [gateU, setGateU] = useState(GATE_U);
   const [speed, setSpeed] = useState(1);
   const [paused, setPaused] = useState(false);
   const [stepToken, setStepToken] = useState(0);
@@ -73,13 +82,14 @@ export default function L1Lab() {
   const commitRef = useRef<() => void>(() => {});
 
   stateRef.current = {
-    ...params, stage, speed, paused, stepToken, runId, samples: sim,
+    ...params, stage, speed, paused, stepToken, runId, samples: sim, gateU,
+    onGateChange: setGateU,
     onProgress: (t) => { if (readout.current) readout.current.textContent = `${t.toFixed(2)} s`; },
     onFinish: () => commitRef.current(),
   };
 
   commitRef.current = () => {
-    setRecs((r) => [...r, buildRecord(params, sim, r.length + 1)]);
+    setRecs((r) => [...r, buildRecord(params, sim, gateU, r.length + 1)]);
     setSel('c1');
     setStage('analyze');
   };
@@ -183,13 +193,15 @@ export default function L1Lab() {
           <Panel title="布置 · 垫片与纸带" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>a = g·h/L</span>}>
             <Slider label="垫片高度 h（抬高左端）" value={h} min={0.01} max={0.06} step={0.005} unit=" m" onChange={setH} />
             <Slider label="挡光片宽度 d" value={flagWidth} min={0.01} max={0.05} step={0.01} unit=" m" onChange={setFlag} />
+            <Slider label="光电门位置 u（导轨坐标）" value={gateU} min={-0.3} max={0.42} step={0.01} unit=" m" onChange={setGateU} />
             <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
               倾角 sinθ = h/L = <b>{(h / RAIL_LEN).toFixed(4)}</b><br />
               理论加速度 a = <b style={{ color: 'var(--c-accent-2)' }}>{theoryAccel(params).toFixed(3)}</b> m/s²<br />
               行程 {TRAVEL.toFixed(2)} m · 计时器 0.02 s 一点（5 点取 1 个计数点）
             </div>
             <div style={{ fontSize: 12, color: 'var(--c-text-faint)', lineHeight: 1.7 }}>
-              纸带已从计时器针口引出，点距 = 0.02 s 内的位移；分析页可用逐差法与 v-t 拟合两种方法求 a。
+              纸带从计时器后限位孔穿入、经复写纸盘下方从前孔引出，末端用压片压在滑行器尾部；
+              振针每 0.02 s 在带上打一点，点距就是该段的位移。布置阶段可直接拖动计时器与光电门。
             </div>
             <button className="pill" style={{ alignSelf: 'flex-start', padding: '9px 20px', fontSize: 13 }} onClick={start}>释放滑行器 →</button>
           </Panel>
@@ -199,7 +211,7 @@ export default function L1Lab() {
               模拟时间：<span ref={readout} style={{ color: 'var(--c-accent)' }}>0.00 s</span><br />
               预计到时 {tEnd.toFixed(2)} s · 起点 x₀ = {START_U.toFixed(2)} m
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态不可拖动器材；纸带点随位移逐点打印。</div>
+            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态器材已锁定；光电门只在挡光片穿过光口的 Δt 内计时，其余时间保持 0.0。</div>
           </Panel>
         ) : (
           <Panel title={`分析 · 第 ${cur?.id ?? 1} 组`}>

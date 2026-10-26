@@ -8,10 +8,17 @@ import { ModuleListPage } from '@/shell/ModuleListPage';
 import { KnowledgeMapPage } from '@/graph/KnowledgeMapPage';
 import { LabRoute } from '@/routes/LabRoute';
 import { ConceptCabin } from '@/topics/ConceptCabin';
+import { ModelStudio } from '@/labs/_dev/ModelStudio';
 
 function CabinRoute() {
   const { chapterId = 'M1' } = useParams();
   return <ConceptCabin chapterId={chapterId} />;
+}
+
+// 器材模型试验台（开发用）：/#/model/ticker_timer
+function ModelRoute() {
+  const { apparatusId = 'ticker_timer' } = useParams();
+  return <ModelStudio apparatusId={apparatusId} />;
 }
 
 export default function App() {
@@ -26,6 +33,7 @@ export default function App() {
         <Route path="/lab/:labId" element={<LabRoute />} />
         <Route path="/cabin/:chapterId" element={<CabinRoute />} />
         <Route path="/map" element={<KnowledgeMapPage />} />
+        <Route path="/model/:apparatusId" element={<ModelRoute />} />
         <Route path="*" element={<Navigate to="/subject" replace />} />
       </Routes>
     </HashRouter>

@@ -18,3 +18,14 @@ vite.config.d.ts
 douyin_analysis/
 docs/secuids.json
 secuids.json
+
+# Blender 建模脚本的渲染预览（临时验收截图，不进仓库；模型产物在 public/models）
+blender/preview/
+__pycache__/
+*.pyc
+
+# 一次性调试脚本
+scripts/_dbg.mjs
+scripts/probe-*.mjs
+scripts/shot-*.mjs
+scripts/verify-*.mjs

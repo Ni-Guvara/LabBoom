@@ -14,6 +14,19 @@ import { studioBackdrop, studioBackwall, studioEnvironment, studioLights } from 
 export interface DragOptions {
   /** 贴台面平移（默认）或锁定垂直方向 */
   plane?: 'floor' | 'vertical';
+  /**
+   * 拖动许可。返回 false 时该器材完全不参与拖拽（事件不拦截，左键照样转相机）。
+   * 用来做「布置阶段可摆、运行阶段锁死」，而不是靠改 scene 的注册表。
+   */
+  canDrag?: () => boolean;
+  /**
+   * 把拖动约束到台面上的一条轴。导轨上滑动的器材（计时器、光电门）只需一个自由度：
+   * 不约束的话鼠标一斜就把器材拽离导轨，装配关系散架。
+   */
+  axis?: 'x' | 'z';
+  /** 沿约束轴的中心坐标允许区间（m），超出即夹住 */
+  min?: number;
+  max?: number;
   onMove?: (pos: THREE.Vector3) => void;
 }
 
@@ -156,11 +169,16 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
     const dragRoots = new Map<THREE.Object3D, DragOptions>();
     const draggable: SceneApi['draggable'] = (obj, opts) => { dragRoots.set(obj, opts ?? {}); };
 
-    const toNdc = (e: PointerEvent) => {
+    /** 只更新射线，不做求交（拖动时每帧都要算，求交太贵） */
+    const setRay = (e: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       ray.setFromCamera(ndc, camera);
+    };
+
+    const toNdc = (e: PointerEvent) => {
+      setRay(e);
       return ray.intersectObjects(scene.children, true);
     };
 
@@ -179,11 +197,15 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
 
     interface Pending {
       root: THREE.Object3D;
+      opts: DragOptions;
       startX: number;
       startY: number;
       started: boolean;
       startPos: THREE.Vector3;
+      /** 按下时器材所在的高度平面（世界 y）：整段拖动都在这个平面上解算 */
       plane: THREE.Plane;
+      /** 按下瞬间鼠标射线与该平面的交点，作为位移零点 */
+      startWorld: THREE.Vector3;
       point: THREE.Vector3;
       vertical: boolean;
     }
@@ -196,17 +218,26 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
       const root = rootOf(hits[0]?.object);
       if (!root) return; // 落空白 → 交给 OrbitControls 旋转
       // 命中器材：拦截事件，避免 OrbitControls 同时开始旋转相机
-      e.stopImmediatePropagation();
       const opts = dragRoots.get(root)!;
+      // 锁定态（运行/分析页、物理量已绑定的器材）直接放行给相机，不做任何拦截
+      if (opts.canDrag && !opts.canDrag()) return;
+      e.stopImmediatePropagation();
       const vertical = opts.plane === 'vertical';
+      const worldPos = new THREE.Vector3();
+      root.getWorldPosition(worldPos);
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -worldPos.y);
+      const startWorld = worldPos.clone();
+      ray.ray.intersectPlane(plane, startWorld);
       pending = {
         root,
+        opts,
         startX: e.clientX,
         startY: e.clientY,
         started: false,
         startPos: root.position.clone(),
-        plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -root.position.y),
-        point: root.position.clone(),
+        plane,
+        startWorld,
+        point: new THREE.Vector3(),
         vertical,
       };
       renderer.domElement.setPointerCapture(e.pointerId);
@@ -220,23 +251,34 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
         pending.started = true;
         controls.enabled = false; // 相机与器材互斥锁定
       }
-      const hits = toNdc(e);
+      setRay(e);
+      const opts = pending.opts;
+      const parent = pending.root.parent;
       if (pending.vertical || e.shiftKey) {
         // 垂直升降：用屏幕纵向位移换算
         const dy = (pending.startY - e.clientY) * 0.002;
         pending.root.position.y = Math.max(0, pending.startPos.y + dy);
-      } else {
-        const hit = hits.find((h) => h.face);
-        if (hit) {
-          pending.plane.setFromNormalAndCoplanarPoint(
-            new THREE.Vector3(0, 1, 0),
-            new THREE.Vector3(0, pending.root.position.y, 0),
-          );
-          if (ray.ray.intersectPlane(pending.plane, pending.point)) {
-            pending.root.position.x = pending.point.x;
-            pending.root.position.z = pending.point.z;
-          }
+      } else if (ray.ray.intersectPlane(pending.plane, pending.point)) {
+        // 用「位移增量」而不是绝对交点：position 是父级局部坐标，而射线解出的是世界坐标，
+        // 直接赋值会让挂在 group 下的器材（导轨上的计时器/光电门）一拖就跳半个机身。
+        const delta = pending.point.clone().sub(pending.startWorld);
+        if (parent) {
+          const q = new THREE.Quaternion();
+          parent.getWorldQuaternion(q).invert();
+          delta.applyQuaternion(q);
         }
+        pending.root.position.x = pending.startPos.x + delta.x;
+        pending.root.position.z = pending.startPos.z + delta.z;
+      }
+      // 单自由度器材（导轨上的计时器/光电门）：另一个水平轴钉回原位，再夹在行程内
+      if (opts.axis === 'x') {
+        pending.root.position.z = pending.startPos.z;
+        if (opts.min !== undefined) pending.root.position.x = Math.max(opts.min, pending.root.position.x);
+        if (opts.max !== undefined) pending.root.position.x = Math.min(opts.max, pending.root.position.x);
+      } else if (opts.axis === 'z') {
+        pending.root.position.x = pending.startPos.x;
+        if (opts.min !== undefined) pending.root.position.z = Math.max(opts.min, pending.root.position.z);
+        if (opts.max !== undefined) pending.root.position.z = Math.min(opts.max, pending.root.position.z);
       }
       dragRoots.get(pending.root)?.onMove?.(pending.root.position);
     };
@@ -352,6 +394,26 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
     };
 
     const api: SceneApi = { scene, camera, addAnchor, setAnchorText, pick, onTick, draggable, focusOn, setTarget };
+    // 调试口：自检脚本据此读相机/拖拽表，做局部特写与「器材是否可拖」的自动化验证
+    (window as unknown as Record<string, unknown>).__labboomScene = {
+      scene, camera, controls, dragRoots, renderer,
+      /** 屏幕坐标 → 射线命中列表（name + 距离），用于核对"这一下点到了什么" */
+      pickAt: (cx: number, cy: number) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        const v2 = new THREE.Vector2(
+          ((cx - rect.left) / rect.width) * 2 - 1,
+          -((cy - rect.top) / rect.height) * 2 + 1,
+        );
+        const rc = new THREE.Raycaster();
+        rc.setFromCamera(v2, camera);
+        return rc.intersectObjects(scene.children, true).slice(0, 6).map((h) => {
+          const chain: string[] = [];
+          let c: THREE.Object3D | null = h.object;
+          while (c && chain.length < 5) { chain.push(c.name || c.type); c = c.parent; }
+          return { chain: chain.join('<'), dist: +h.distance.toFixed(3) };
+        });
+      },
+    };
     let cleanup: (() => void) | undefined;
     let mounted = true;
 

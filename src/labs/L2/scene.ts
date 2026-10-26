@@ -34,29 +34,36 @@ export function buildSpringScene(
   getState: () => SpringState,
   getView: () => 'macro' | 'micro'
 ): () => void {
-  const { scene, camera, addAnchor, setAnchorText, onTick, setTarget } = api;
+  const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
 
   const bench = tableTop(1.6, 1.2);
   scene.add(bench);
 
+  // 整套器材放进一个 rig：布置阶段可以整体挪位置，运行阶段锁定
+  const rig = new THREE.Group();
+  rig.name = 'rig';
+  scene.add(rig);
+  // 铁架台 + 弹簧 + 砝码盘是一个整体：拖它挪位置，弹簧和盘一起走，装配关系不散
+  draggable(rig, { plane: 'floor' });
+
   // ---------- 铁架台 ----------
   const base = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.012, 0.12), mat('steel'));
   base.position.set(ROD_X, 0.006, -0.05);
-  scene.add(base);
+  rig.add(base);
   const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, ROD_H, 20), mat('steel'));
   rod.position.set(ROD_X, ROD_H / 2, -0.05);
-  scene.add(rod);
+  rig.add(rod);
   // 横臂 + 十字夹
   const armClamp = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.03, 0.03), mat('plasticBlack'));
   armClamp.position.set(ROD_X, TOP_Y + 0.03, -0.05);
-  scene.add(armClamp);
+  rig.add(armClamp);
   const arm = new THREE.Mesh(new THREE.BoxGeometry(SPRING_X + 0.06, 0.012, 0.014), mat('steel'));
   arm.position.set(SPRING_X / 2, TOP_Y + 0.045, -0.05);
-  scene.add(arm);
+  rig.add(arm);
   // 横臂端头的挂钩
   const armHook = new THREE.Mesh(new THREE.TorusGeometry(0.008, 0.0014, 8, 16), mat('steel'));
   armHook.position.set(SPRING_X, TOP_Y + 0.03, -0.05);
-  scene.add(armHook);
+  rig.add(armHook);
   addAnchor(rod, '铁架台 · 立杆 900 mm', undefined, 0.5);
 
   // ---------- 弹簧（圈数固定，靠 group 的 y 缩放表现伸长） ----------
@@ -70,12 +77,12 @@ export function buildSpringScene(
     ring.position.y = -(i * L0) / COILS;
     spring.add(ring);
   }
-  scene.add(spring);
+  rig.add(spring);
   const springAnchor = addAnchor(spring, '弹簧 k = 40 N/m', undefined, -0.03);
 
   // ---------- 托盘 + 挂钩 ----------
   const tray = new THREE.Group();
-  scene.add(tray);
+  rig.add(tray);
   const trayPlate = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.0022, 24), mat('aluminumMatte'));
   tray.add(trayPlate);
   const trayHook = new THREE.Mesh(new THREE.TorusGeometry(0.005, 0.001, 8, 14), mat('steel'));
@@ -93,7 +100,7 @@ export function buildSpringScene(
 
   // ---------- 砝码（φ30 mm 圆片，逐片叠在盘上） ----------
   const weightsGroup = new THREE.Group();
-  scene.add(weightsGroup);
+  rig.add(weightsGroup);
   const weightMat = mat('brass');
   const rebuildWeights = (n: number) => {
     while (weightsGroup.children.length) weightsGroup.remove(weightsGroup.children[0]);
@@ -122,12 +129,12 @@ export function buildSpringScene(
     t.position.set(-0.0225 + (long ? 0.007 : 0.004), 0.46 + i * 0.01, 0.0018);
     ruler.add(t);
   }
-  scene.add(ruler);
+  rig.add(ruler);
   addAnchor(ruler, '米尺 · 0~40 cm（读伸长量）', undefined, 0.2);
 
   // ---------- 指针（红标，跟着盘口走，直接对刻度） ----------
   const pointer = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.0016, 0.004), mat('plasticRed'));
-  scene.add(pointer);
+  rig.add(pointer);
 
   let forceArrow: THREE.ArrowHelper | null = null;
   let gravityArrow: THREE.ArrowHelper | null = null;
@@ -145,7 +152,7 @@ export function buildSpringScene(
     );
     microGroup.add(p);
   }
-  scene.add(microGroup);
+  rig.add(microGroup);
 
   let lastN = -1;
   onTick(() => {
@@ -174,14 +181,14 @@ export function buildSpringScene(
 
     if (n > 0) {
       const aLen = Math.min(0.12, 0.03 + F * 0.012);
-      if (forceArrow) { scene.remove(forceArrow); forceArrow.dispose(); }
-      if (gravityArrow) { scene.remove(gravityArrow); gravityArrow.dispose(); }
+      if (forceArrow) { rig.remove(forceArrow); forceArrow.dispose(); }
+      if (gravityArrow) { rig.remove(gravityArrow); gravityArrow.dispose(); }
       forceArrow = makeArrow(new THREE.Vector3(SPRING_X, trayY + 0.02, -0.05), new THREE.Vector3(0, aLen, 0), 'force');
       gravityArrow = makeArrow(new THREE.Vector3(SPRING_X + 0.02, trayY - 0.005, -0.05), new THREE.Vector3(0, -aLen, 0), 'force');
-      scene.add(forceArrow, gravityArrow);
+      rig.add(forceArrow, gravityArrow);
     } else if (forceArrow) {
-      scene.remove(forceArrow); forceArrow.dispose(); forceArrow = null;
-      if (gravityArrow) { scene.remove(gravityArrow); gravityArrow.dispose(); gravityArrow = null; }
+      rig.remove(forceArrow); forceArrow.dispose(); forceArrow = null;
+      if (gravityArrow) { rig.remove(gravityArrow); gravityArrow.dispose(); gravityArrow = null; }
     }
 
     microGroup.visible = view === 'micro';
