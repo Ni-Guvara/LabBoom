@@ -69,7 +69,7 @@ CLAMP_H = 0.012
 SPRING_Z1 = round(ARM_Y - CLAMP_H / 2 - 0.004, 4)
 
 # ---------- 手轮 / 摇把 ----------
-HAND_X, HAND_Y, HAND_Z = 0.112, 0.008, 0.050
+HAND_X, HAND_Y, HAND_Z = 0.150, 0.006, 0.052
 HAND_R = 0.038
 GRIP_X = 0.206
 
@@ -134,10 +134,11 @@ def stepped_pulley(name, x, steps):
         # 每级带 1.5 mm 拔模（下大上小）：这是车削件的特征，纯圆柱会看成一摞平盘
         parts.append(cone(f"{name}_step{i + 1}", r, r - 0.0015, h, (x, 0, z + h / 2), YELLOW(), verts=96))
         z += h
-    # 顶面那块大平盘最容易被读成"盘子"：套一截更粗的黑轴套压住，只留一圈窄环
-    parts.append(cyl(f"{name}_boss", 0.030, 0.016, (x, 0, BASE_TOP + 0.008), mat_plastic_black(), verts=32))
-    parts.append(cyl(f"{name}_boss2", 0.038, 0.012, (x, 0, PULLEY_TOP + 0.004), mat_plastic_black(), verts=36))
-    parts.append(cyl(f"{name}_cap", 0.0140, 0.005, (x, 0, PULLEY_TOP + 0.0125), mat_steel(), verts=24))
+    # 中心黑轴套：直径必须远小于塔轮顶盘（顶盘 Ø72，轴套 Ø42），
+    # 早前做到 Ø76 —— 比顶盘还大，正面看就是塔轮上扣了一只黑锅盖。
+    parts.append(cyl(f"{name}_boss", 0.024, 0.020, (x, 0, BASE_TOP + 0.010), mat_plastic_black(), verts=32))
+    parts.append(cyl(f"{name}_boss2", 0.021, 0.010, (x, 0, PULLEY_TOP + 0.004), mat_plastic_black(), verts=32))
+    parts.append(cyl(f"{name}_cap", 0.0125, 0.005, (x, 0, PULLEY_TOP + 0.0115), mat_steel(), verts=24))
     return join_into(name, parts)
 
 
