@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 import { SceneHost, type SceneApi } from '@/engine/SceneHost';
 import {
-  buildL1Scene, buildSamples, theoryAccel, gateOffset, GATE_U, RAIL_LEN, START_U, TRAVEL,
+  buildL1Scene, buildSamples, theoryAccel, gateOffset,
+  GATE_U, GATE_MIN_U, GATE_MAX_U, RAIL_LEN, START_U, TRAVEL,
   type L1Params, type L1State,
 } from './scene';
 import { LabFrame } from '@/labs/_template/LabFrame';
@@ -83,7 +84,9 @@ export default function L1Lab() {
 
   stateRef.current = {
     ...params, stage, speed, paused, stepToken, runId, samples: sim, gateU,
-    onGateChange: setGateU,
+    // 拖动回写的是连续浮点，落到面板上按 1 cm 取整：滑杆步长 0.01，
+    // 不取整面板会显示 0.8926273035857537 这种尾巴
+    onGateChange: (u) => setGateU(Math.round(u * 100) / 100),
     onProgress: (t) => { if (readout.current) readout.current.textContent = `${t.toFixed(2)} s`; },
     onFinish: () => commitRef.current(),
   };
@@ -193,7 +196,7 @@ export default function L1Lab() {
           <Panel title="布置 · 垫片与纸带" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>a = g·h/L</span>}>
             <Slider label="垫片高度 h（抬高左端）" value={h} min={0.01} max={0.06} step={0.005} unit=" m" onChange={setH} />
             <Slider label="挡光片宽度 d" value={flagWidth} min={0.01} max={0.05} step={0.01} unit=" m" onChange={setFlag} />
-            <Slider label="光电门位置 u（导轨坐标）" value={gateU} min={-0.3} max={0.42} step={0.01} unit=" m" onChange={setGateU} />
+            <Slider label="光电门位置 u（导轨坐标）" value={gateU} min={GATE_MIN_U} max={GATE_MAX_U} step={0.01} unit=" m" onChange={setGateU} />
             <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
               倾角 sinθ = h/L = <b>{(h / RAIL_LEN).toFixed(4)}</b><br />
               理论加速度 a = <b style={{ color: 'var(--c-accent-2)' }}>{theoryAccel(params).toFixed(3)}</b> m/s²<br />
@@ -201,7 +204,8 @@ export default function L1Lab() {
             </div>
             <div style={{ fontSize: 12, color: 'var(--c-text-faint)', lineHeight: 1.7 }}>
               纸带从计时器后限位孔穿入、经复写纸盘下方从前孔引出，末端用压片压在滑行器尾部；
-              振针每 0.02 s 在带上打一点，点距就是该段的位移。布置阶段可直接拖动计时器与光电门。
+              振针每 0.02 s 在带上打一点，点距就是该段的位移。光电门默认立在导轨中段，
+              可以直接在台面上拖动它，也可以用滑杆微调位置。
             </div>
             <button className="pill" style={{ alignSelf: 'flex-start', padding: '9px 20px', fontSize: 13 }} onClick={start}>释放滑行器 →</button>
           </Panel>
@@ -211,7 +215,10 @@ export default function L1Lab() {
               模拟时间：<span ref={readout} style={{ color: 'var(--c-accent)' }}>0.00 s</span><br />
               预计到时 {tEnd.toFixed(2)} s · 起点 x₀ = {START_U.toFixed(2)} m
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态器材已锁定；光电门只在挡光片穿过光口的 Δt 内计时，其余时间保持 0.0。</div>
+            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>
+              运行态器材已锁定。挡光片进光口时数显开始计时，后沿离开即定格为该次 Δt ——
+              1× 下只有 0.04 s，用左上角慢放或单步才看得清跳动。
+            </div>
           </Panel>
         ) : (
           <Panel title={`分析 · 第 ${cur?.id ?? 1} 组`}>
@@ -252,8 +259,12 @@ export default function L1Lab() {
               </table>
             </div>
           ) : <div style={{ fontSize: 12.5, color: 'var(--c-text-faint)' }}>尚无数据：先在布置页释放滑行器。</div>}
-          <div ref={chartEl} style={{ width: '100%', height: 200 }} />
-          <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>点表格行可在 v-t 图上高亮对应点。</div>
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · v-t 图">
+          <div ref={chartEl} style={{ width: '100%', height: 260 }} />
+          <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>点「数据记录」里的行，可在图上高亮对应点。</div>
         </Panel>
       }
       conclusion={

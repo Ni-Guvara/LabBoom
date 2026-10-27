@@ -31,7 +31,7 @@ function buildRecord(p: L5Params, id: number): Rec {
 
 export default function L5Lab() {
   const [stage, setStage] = useState<Stage>('setup');
-  const [releaseH, setReleaseH] = useState(0.18);
+  const [releaseH, setReleaseH] = useState(0.09);
   const [speed, setSpeed] = useState(1);
   const [paused, setPaused] = useState(false);
   const [stepToken, setStepToken] = useState(0);
@@ -163,12 +163,12 @@ export default function L5Lab() {
       stage={<SceneHost setup={setup} />}
       panel={
         stage === 'setup' ? (
-          <Panel title="布置 · 斜槽与描迹板" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>x=v₀t, y=½gt²</span>}>
-            <Slider label="斜槽上释放高度 H" value={releaseH} min={0.06} max={0.3} step={0.02} unit=" m" onChange={setReleaseH} />
+          <Panel title="布置 · 斜槽与标尺白板" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>x=v₀t, y=½gt²</span>}>
+            <Slider label="斜槽上释放高度 H" value={releaseH} min={0.04} max={0.13} step={0.01} unit=" m" onChange={setReleaseH} />
             <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
               抛出口速度 v₀ = √(2gH·η) = <b style={{ color: 'var(--c-accent)' }}>{v0Of(params).toFixed(3)}</b> m/s<br />
               抛出点高度 {Y0.toFixed(2)} m · 飞行时间 {tf.toFixed(3)} s<br />
-              频闪间隔 0.05 s，可留 {dots.length} 个点（5 cm 方格靶板）
+              频闪间隔 0.05 s，可留 {dots.length} 个点（白板双标尺 0–28 cm 读数）
             </div>
             <div style={{ fontSize: 12, color: 'var(--c-text-faint)', lineHeight: 1.7 }}>
               分析时先验证水平方向 Δx 恒定（匀速），再验证竖直方向 Δy 的差值恒定（匀加速）。
@@ -181,7 +181,7 @@ export default function L5Lab() {
               曝光时间：<span ref={readout} style={{ color: 'var(--c-accent)' }}>0 ms</span><br />
               总飞行 {tf.toFixed(3)} s（每 0.05 s 一次闪光）
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态器材锁定；靶板上的红点为频闪像。</div>
+            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态器材锁定；靶板上的蓝色小点为频闪像（红色圆点是白板按扣，不是轨迹）。</div>
           </Panel>
         ) : (
           <Panel title={`分析 · 第 ${cur?.id ?? 1} 组`}>
@@ -226,7 +226,11 @@ export default function L5Lab() {
               </table>
             </div>
           ) : <div style={{ fontSize: 12.5, color: 'var(--c-text-faint)' }}>尚无数据：先在布置页释放钢球。</div>}
-          <div ref={chartEl} style={{ width: '100%', height: 200 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title={mode === 'xt' ? '数据绘图 · x-t' : '数据绘图 · y-t²'}>
+          <div ref={chartEl} style={{ width: '100%', height: 280 }} />
           <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>Δx 恒定 → 水平匀速；Δ²y 恒定 → 竖直匀加速（gT²）。</div>
         </Panel>
       }

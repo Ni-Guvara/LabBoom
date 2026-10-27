@@ -4,7 +4,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 import { SceneHost, type SceneApi } from '@/engine/SceneHost';
-import { buildL4Scene, buildSamples, theoryAccel, GATE_OFFSET, type L4State, type L4Params } from './scene';
+import {
+  buildL4Scene, buildSamples, theoryAccel, gateTravel, GATE_OFFSET, GATE_MIN, GATE_MAX,
+  type L4State, type L4Params,
+} from './scene';
 import { LabFrame } from '@/labs/_template/LabFrame';
 import { Slider, ModeToggle, Panel } from '@/primitives/Primitives';
 import { linearFit, downloadCSV } from '@/utils/fit';
@@ -24,11 +27,24 @@ interface Rec {
 
 function buildRecord(p: L4Params, samples: Sample[], id: number): Rec {
   // 数据粒度=物理事件且总量受控：只取前 1.4 s 的计数点（≤13 行）+ 1 行光电门 ≤ 15 行
-  const cps = countingPoints(samples, 5, 0.02).filter((s) => s.t > 0.08 && s.t <= 1.4);
-  const vs = tapeVelocities(cps, 0.1);
-  const gates = gateReadings(samples, [{ id: 'G1', x: GATE_OFFSET, flagWidth: p.flagWidth }]);
+  //
+  // 端点必须让掉：tapeVelocities 的中间差分 v_n=(x_{n+1}−x_{n−1})/2T 对应 t_n，
+  // 但首尾点没有邻点、只能退化成单侧差商 (x_{n+1}−x_n)/T，它对应的是 t_n+T/2。
+  // 两个端点各错半个节拍，v-t 拟合的斜率会被拉低约 8%（1.089 → 0.998），
+  // 「验证牛顿第二定律」就会误判为不通过。所以拟合/表格都只用有邻点的点。
+  const all = countingPoints(samples, 5, 0.02);
+  const allV = tapeVelocities(all, 0.1);
+  const keep: number[] = [];
+  all.forEach((s, i) => {
+    if (i > 0 && i < all.length - 1 && s.t > 0.08 && s.t <= 1.4) keep.push(i);
+  });
+  const cps = keep.map((i) => all[i]);
+  const vs = keep.map((i) => allV[i]);
+  // 光电门读的是挡光片前沿到达光轴时的位移，必须减掉前置量（见 scene.gateTravel）
+  const gx = gateTravel(p.gateOffset, p.flagWidth);
+  const gates = gateReadings(samples, [{ id: 'G1', x: gx, flagWidth: p.flagWidth }]);
   const rows: Row[] = cps.map((s, i) => ({ key: `c${i}`, n: String(i + 1), t: s.t, x: s.x, v: vs[i], src: '纸带·中间时刻' }));
-  if (gates[0]) rows.push({ key: 'gate', n: '门', t: gates[0].tIn, x: GATE_OFFSET, v: gates[0].v, src: '光电门 v = d/Δt' });
+  if (gates[0]) rows.push({ key: 'gate', n: '门', t: gates[0].tIn, x: gx, v: gates[0].v, src: '光电门 v = d/Δt' });
   const fit = linearFit(cps.map((s, i) => ({ x: s.t, y: vs[i] })));
   return {
     id, M: p.M, m0: p.m0, compensated: p.compensated,
@@ -44,6 +60,8 @@ export default function L4Lab() {
   const [m0, setM0] = useState(0.05);
   const [compensated, setComp] = useState(true);
   const [flagWidth, setFlag] = useState(0.05);
+  // 光电门位置是布置参数（拖光电门 = 改这个值），不是纯视觉的摆设
+  const [gateOffset, setGateOffset] = useState(GATE_OFFSET);
   const [speed, setSpeed] = useState(1);
   const [paused, setPaused] = useState(false);
   const [stepToken, setStepToken] = useState(0);
@@ -52,8 +70,11 @@ export default function L4Lab() {
   const [sel, setSel] = useState<string | null>(null);
   const [chartMode, setChartMode] = useState<'vt' | 'aF'>('vt');
 
-  const params: L4Params = { M, m0, compensated, flagWidth };
-  const sim = useMemo(() => buildSamples({ M, m0, compensated, flagWidth }), [M, m0, compensated, flagWidth]);
+  const params: L4Params = { M, m0, compensated, flagWidth, gateOffset };
+  const sim = useMemo(
+    () => buildSamples({ M, m0, compensated, flagWidth, gateOffset }),
+    [M, m0, compensated, flagWidth, gateOffset],
+  );
   const tEnd = duration(sim);
 
   const markStep = useProgressStore((s) => s.markStep);
@@ -67,6 +88,7 @@ export default function L4Lab() {
 
   stateRef.current = {
     ...params, stage, speed, paused, stepToken, runId, samples: sim,
+    onGateChange: setGateOffset,
     onProgress: (t) => { if (readout.current) readout.current.textContent = `${t.toFixed(2)} s`; },
     onFinish: () => commitRef.current(),
   };
@@ -164,8 +186,8 @@ export default function L4Lab() {
     if (!cur) return;
     const meta: (number | string)[][] = [
       ['实验名', '探究加速度与力、质量的关系'],
-      ['器材', 'J2183 轨道小车 / J0203 打点计时器 / 光电门 / 定滑轮'],
-      ['M/kg', cur.M, 'm0/kg', cur.m0, '摩擦补偿', cur.compensated ? '是' : '否'],
+      ['器材', 'J2183 轨道小车 / J0203 打点计时器 / 光电门 / 定滑轮 / 砂桶'],
+      ['M/kg', cur.M, 'm0/kg', cur.m0, '光电门位置/m', gateOffset, '摩擦补偿', cur.compensated ? '是' : '否'],
       ['a拟合', +cur.aFit.toFixed(4), 'a理论', +cur.aTheory.toFixed(4), 'R2', +cur.r2.toFixed(4)],
       [],
     ];
@@ -206,8 +228,9 @@ export default function L4Lab() {
         stage === 'setup' ? (
           <Panel title="布置 · 器材与参数" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>a=(m0g−f)/(M+m0)</span>}>
             <Slider label="小车质量 M" value={M} min={0.2} max={0.8} step={0.05} unit=" kg" onChange={setM} />
-            <Slider label="砝码质量 m0" value={m0} min={0.02} max={0.2} step={0.01} unit=" kg" onChange={setM0} />
+            <Slider label="砂桶质量 m0" value={m0} min={0.02} max={0.2} step={0.01} unit=" kg" onChange={setM0} />
             <Slider label="挡光片宽度 d" value={flagWidth} min={0.01} max={0.05} step={0.01} unit=" m" onChange={setFlag} />
+            <Slider label="光电门位置" value={gateOffset} min={GATE_MIN} max={GATE_MAX} step={0.01} unit=" m" onChange={setGateOffset} />
             <ModeToggle label="摩擦补偿（垫高木板）" value={compensated} onChange={setComp} />
             <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
               F = m0·g = <b style={{ color: 'var(--c-accent)' }}>{(m0 * 9.8).toFixed(3)}</b> N<br />
@@ -215,7 +238,7 @@ export default function L4Lab() {
               {!compensated && <><br /><span style={{ color: 'var(--c-warn)' }}>未补偿摩擦 f = 0.20 N → 截距不为 0</span></>}
             </div>
             <div style={{ fontSize: 12, color: 'var(--c-text-faint)', lineHeight: 1.7 }}>
-              拖动器材可移动、双击聚焦、1/3/7 切换前/右/顶视、滚轮朝光标缩放。
+              光电门可在木板上直接拖动，位置会回写到上面的滑杆；双击聚焦、1/3/7 切换前/右/顶视、滚轮朝光标缩放。
             </div>
             <button className="pill" style={{ alignSelf: 'flex-start', padding: '9px 20px', fontSize: 13 }} onClick={start}>
               释放小车，开始记录 →
@@ -227,7 +250,7 @@ export default function L4Lab() {
               模拟时间：<span ref={readout} style={{ color: 'var(--c-accent)' }}>0.00 s</span><br />
               总时长 {tEnd.toFixed(2)} s · 行程 0.42 m
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态器材不可拖动，防止误碰作废。</div>
+            <div style={{ fontSize: 12.5, color: 'var(--c-warn)' }}>运行态器材已锁定，请勿触碰相机以外的操作。</div>
             <div style={{ fontSize: 12.5, color: 'var(--c-text-faint)', lineHeight: 1.8 }}>
               纸带 0.02 s 一点，每 5 点取一个计数点（0.1 s）；光电门 Δt = d/v。
             </div>
@@ -255,8 +278,9 @@ export default function L4Lab() {
           title={chartMode === 'vt' ? '数据 · 本组事件记录' : '数据 · 跨组 a-F'}
           right={<span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>有效记录 {cur?.rows.length ?? 0} 行</span>}
         >
+          {/* 表头 24.5 + 7 行×25 ≈ 200：高度对准整行，避免出现半截行 */}
           {chartMode === 'vt' && cur ? (
-            <div style={{ maxHeight: 190, overflow: 'auto' }}>
+            <div style={{ maxHeight: 200, overflow: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>
                   <tr style={{ color: 'var(--c-text-faint)', textAlign: 'left' }}>
@@ -288,7 +312,11 @@ export default function L4Lab() {
               ))}
             </div>
           )}
-          <div ref={chartEl} style={{ width: '100%', height: 210 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title={chartMode === 'vt' ? '数据绘图 · v-t' : '数据绘图 · a-F'}>
+          <div ref={chartEl} style={{ width: '100%', height: 280 }} />
           <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>点表格行可在曲线上高亮对应点，反之亦然。</div>
         </Panel>
       }
@@ -300,7 +328,7 @@ export default function L4Lab() {
           <div style={{ fontSize: 13, color: pass ? 'var(--c-accent-2)' : 'var(--c-warn)' }}>
             {cur ? `当前判定：${pass ? '通过' : '未通过（检查摩擦补偿或数据点）'}` : '尚未采集数据'}
           </div>
-          <button className="pill" disabled={!pass} style={{ padding: '8px 18px', fontSize: 13, opacity: pass ? 1 : 0.5 }} onClick={submit}>
+          <button className="pill" disabled={!pass} style={{ alignSelf: 'flex-start', padding: '8px 18px', fontSize: 13, opacity: pass ? 1 : 0.5 }} onClick={submit}>
             验证牛顿第二定律
           </button>
         </Panel>

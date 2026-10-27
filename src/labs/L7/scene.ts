@@ -5,6 +5,7 @@ import type { SceneApi } from '@/engine/SceneHost';
 import { mat } from '@/engine/materials';
 import { retortStand, plumb, releaseClamp, tableTop, textPlate } from '@/labs/_shared/instruments';
 import { fitCamera, boxOfSubject } from '@/labs/_shared/framing';
+import { loadOrFallback } from '@/labs/_shared/models';
 import { simulate, sampleAt, gateReadings, type MotionModel, type Sample } from '@/engine/physics/kinematics';
 
 export const G = 9.8;
@@ -45,7 +46,9 @@ export function labModel(p: L7Params): MotionModel {
 }
 
 export function buildSamples(p: L7Params): Sample[] {
-  const end = x2Of(p) + 0.02;
+  // 落点：锤底落到桌面附近就停（锤体高约 36 mm），不要停在下门里——
+  // 原来只多跑 20 mm，重锤正好卡在下门的叉板中间，看着像被门卡住了。
+  const end = Math.max(x2Of(p) + 0.02, RELEASE_Y - 0.045);
   return simulate(labModel(p), { tEnd: 1.2, dt: 0.0002, stop: (s) => s.x >= end });
 }
 
@@ -68,72 +71,96 @@ export function measure(p: L7Params, samples: Sample[]): L7Gates | null {
 }
 
 /**
- * 光电门（局部坐标：光束高度 = y 0，整组用 position.y 调高度）
- * U 形叉头 + 红外发射/接收窗 + 数显窗 + 指示灯 + 手轮，
- * 再用横臂 + 十字夹夹在铁架台立杆上——原来横臂悬在半空，看着和支架没连接。
+ * 自由落体光电门的程序化兜底（仅在 drop_gate.glb 加载失败时使用）
+ *
+ * 门头结构是这套器材最容易做错的地方：落体是竖直穿过门的，所以两片叉板必须
+ * 左右分开、上下完全敞开（净空 46 mm），重锤从两片之间竖直落下去，光束沿 x
+ * 横穿这片空隙。之前做成"开口朝下的 U 形"——两爪之间确实有 50 mm，但顶上还压着
+ * 一根 80 mm 宽的顶梁，正好横在落体线正上方，重锤一下落就撞梁。
+ * 数显盒、指示灯全部退到落体线后方（z < −30 mm），横臂也从后方绕到立杆，
+ * 保证下落路径上没有任何实体。
+ *
+ * 尺寸与 blender/build_drop_gate.py 逐项对齐：叉板中心 ±29、净空 46、数显盒 −35、
+ * 横臂高 30、横臂末端到立杆 x = −0.25。改这里必须同步改 Blender 脚本。
  */
-function gateUnit(gap = 0.05): THREE.Group {
+function fallbackGate(): THREE.Group {
   const g = new THREE.Group();
-  const armX = gap / 2 + 0.007;
+  const X_PRONG = 0.029; // 叉板中心：内表面 ±23 mm → 净空 46 mm，容得下 40 mm 遮光片
+  const BACK_Z = -0.035; // 数显盒中心（前表面 -30 mm，重锤后缘 -15 mm 仍留 15 mm 余量）
+  const BAR_Y = 0.030;
 
-  // 顶梁 + 左右两爪（爪沿 x 分开、光束沿 x 穿过）：从正面能看见重锤从两爪之间落下，
-  // 若改成前后两片，正面看就把重锤整个挡住了。
-  const bridge = new THREE.Mesh(new THREE.BoxGeometry(gap + 0.03, 0.012, 0.034), mat('plasticBlack'));
-  bridge.position.set(0, 0.042, 0);
-  bridge.castShadow = true;
-  g.add(bridge);
+  // 数显盒：读数窗、指示灯、锁紧手轮都装在这块上，整块躲在落体线后面
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.084, 0.010), mat('plasticGray', { color: 0x555e68 }));
+  back.position.set(0, -0.008, BACK_Z);
+  back.castShadow = true;
+  g.add(back);
 
   for (const sx of [-1, 1]) {
-    // 中灰工程塑料：纯黑在背光侧会糊成一团黑影，看不出叉头结构
-    const prong = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.062, 0.034), mat('plasticGray', { color: 0x555e68 }));
-    prong.position.set(sx * armX, 0.006, 0);
+    // 竖直叉板：48 mm 高的一小段，上下敞开、顶上不加横梁
+    const prong = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.048, 0.030), mat('plasticBlack'));
+    prong.position.set(sx * X_PRONG, 0.002, -0.010);
     prong.castShadow = true;
     g.add(prong);
-    // 红外发射/接收窗（正对重锤下落路径）
+    // 红外发射/接收窗：嵌在两片内侧，正对 46 mm 的缝
     const lens = new THREE.Mesh(
       new THREE.CylinderGeometry(0.0034, 0.0034, 0.004, 14),
       mat('plasticRed', { emissive: sx < 0 ? 0x772211 : 0x220000 }),
     );
     lens.rotation.z = Math.PI / 2;
-    lens.position.set(sx * (gap / 2 - 0.002), 0, 0);
+    lens.position.set(sx * (X_PRONG - 0.007), 0.002, -0.010);
     g.add(lens);
   }
 
-  // 数显窗：挡光时间 / 速度直接做在器材面板上（常显，不走 2 s 悬停）
-  const plate = textPlate(0.044, 0.016, '--', { fontSize: 78 });
-  plate.mesh.position.set(0, 0.042, 0.0175);
-  g.add(plate.mesh);
+  // 数显窗底板由 glb/兜底各自做，读数面统一由 makeGate() 贴（见下）
   const led = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 10, 8), mat('plasticRed', { emissive: 0x772211 }));
-  led.position.set(0.023, 0.048, 0.0175);
+  led.position.set(-0.016, 0.020, BACK_Z + 0.0058);
   g.add(led);
 
-  // 叉头锁紧手轮
+  // 数显盒右侧的锁紧手轮
   const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.006, 14), mat('plasticBlack'));
-  knob.position.set(-0.01, 0.051, 0);
+  knob.rotation.z = Math.PI / 2;
+  knob.position.set(0.030, -0.008, BACK_Z);
   g.add(knob);
 
-  // 横臂：从顶梁左端伸到立杆
-  const barLen = -ROD_X - (gap / 2 + 0.014);
+  // 横臂：从数显盒上沿（落体线后方）伸到立杆
+  const barLen = -ROD_X - 0.021;
   const bar = new THREE.Mesh(new THREE.BoxGeometry(barLen, 0.009, 0.011), mat('steel', { color: 0x9aa4ad }));
-  bar.position.set(ROD_X + barLen / 2, 0.042, 0);
+  bar.position.set(ROD_X + barLen / 2, BAR_Y, BACK_Z);
   bar.castShadow = true;
   g.add(bar);
 
   // 立杆上的十字夹 + 压紧手轮
-  const clampBox = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.026, 0.024), mat('steel', { color: 0x9aa4ad }));
-  clampBox.position.set(ROD_X, 0.042, 0);
+  const clampBox = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.028, 0.045), mat('steel', { color: 0x9aa4ad }));
+  clampBox.position.set(ROD_X, BAR_Y, -0.020);
   g.add(clampBox);
   const clampKnob = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.008, 14), mat('plasticBlack'));
   clampKnob.rotation.x = Math.PI / 2;
-  clampKnob.position.set(ROD_X, 0.042, 0.018);
+  clampKnob.position.set(ROD_X, BAR_Y, 0.004);
   g.add(clampKnob);
 
-  g.userData.setReadout = (t: string) => plate.setText(t);
-  g.userData.spec = { name: '光电门', size: [0.04, 0.07, gap + 0.04] };
   return g;
 }
 
-export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void {
+/** 数显窗中心（glb 只建了 display_bezel 底板，读数面留白给 canvas 贴图） */
+const DISPLAY = new THREE.Vector3(0, -0.038, -0.0295);
+const DISPLAY_SIZE = { w: 0.040, h: 0.014 };
+
+/**
+ * 取一台光电门：优先 drop_gate.glb，失败回退程序化。
+ * 读数面两种来源都要贴，所以放在这里而不是各自 `Gate()` 里——否则 glb 版会没有读数。
+ */
+async function makeGate(): Promise<THREE.Group> {
+  const m = await loadOrFallback('drop_gate', fallbackGate);
+  const g = m.root;
+  const plate = textPlate(DISPLAY_SIZE.w, DISPLAY_SIZE.h, '0.00', { fontSize: 78 });
+  plate.mesh.position.copy(DISPLAY);
+  g.add(plate.mesh);
+  g.userData.setReadout = (t: string) => plate.setText(t);
+  g.userData.spec = { name: '光电门', size: [0.06, 0.12, 0.06] };
+  return g;
+}
+
+export async function buildL7Scene(api: SceneApi, getState: () => L7State): Promise<() => void> {
   const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
   // 取景在文件末尾统一按器材包围盒计算（fitCamera）
 
@@ -174,12 +201,13 @@ export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void
   let hammerAnchor = addAnchor(hammer, hammerLabel(init));
 
   // 光电门：整组只建一次，改高度就是 position.y —— 拖动滑块立刻能看到门在动
-  const gate1 = gateUnit();
+  // 两次 makeGate 共用同一份 glb 模板（loader 有缓存），不会重复下载
+  const gate1 = await makeGate();
   gate1.position.y = GATE1_Y;
   rig.add(gate1);
   const gate1Anchor = addAnchor(gate1, gateLabel(init, GATE1_Y, 1), undefined, new THREE.Vector3(0, 0.1, 0));
 
-  const gate2 = gateUnit();
+  const gate2 = await makeGate();
   gate2.position.y = init.gate2Y;
   rig.add(gate2);
   const gate2Anchor = addAnchor(gate2, gateLabel(init, init.gate2Y, 2), undefined, new THREE.Vector3(0, 0.1, 0));
@@ -232,12 +260,13 @@ export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void
     setAnchorText(hammerAnchor, hammerLabel(st));
     setAnchorText(gate2Anchor, gateLabel(st, st.gate2Y, 2));
 
-    // 读数窗：布置阶段显示 --，跑过之后显示该门测到的速度
+    // 读数窗：布置阶段一律 0.00；重锤真正挡光结束之后，该门才定格显示自己的速度。
+    // （原来一进 run 就把两门的最终读数整组算好写上，等于"还没落下来数字就已经有了"）
     if (st.stage === 'setup') {
       meas = null;
       measKey = '';
-      setReadout(gate1, '--');
-      setReadout(gate2, '--');
+      setReadout(gate1, '0.00');
+      setReadout(gate2, '0.00');
       setAnchorText(gate1Anchor, gateLabel(st, GATE1_Y, 1));
     } else {
       const key = `${st.mass}|${st.gate2Y}|${st.shadeWidth}`;
@@ -245,15 +274,23 @@ export function buildL7Scene(api: SceneApi, getState: () => L7State): () => void
         measKey = key;
         meas = measure(st, st.samples);
       }
-      if (meas) {
-        setReadout(gate1, meas.v1.toFixed(2));
-        setReadout(gate2, meas.v2.toFixed(2));
-        setAnchorText(gate1Anchor, `光电门 1 · v₁ = ${meas.v1.toFixed(2)} m/s · h = ${GATE1_Y.toFixed(2)} m`);
-        setAnchorText(gate2Anchor, `光电门 2 · v₂ = ${meas.v2.toFixed(2)} m/s · h = ${st.gate2Y.toFixed(2)} m`);
-      }
+      const passed1 = !!meas && simT >= meas.t1 + meas.dt1;
+      const passed2 = !!meas && simT >= meas.t2 + meas.dt2;
+      setReadout(gate1, passed1 ? meas!.v1.toFixed(2) : '0.00');
+      setReadout(gate2, passed2 ? meas!.v2.toFixed(2) : '0.00');
+      setAnchorText(
+        gate1Anchor,
+        passed1 ? `光电门 1 · v₁ = ${meas!.v1.toFixed(2)} m/s · h = ${GATE1_Y.toFixed(2)} m` : gateLabel(st, GATE1_Y, 1),
+      );
+      setAnchorText(
+        gate2Anchor,
+        passed2 ? `光电门 2 · v₂ = ${meas!.v2.toFixed(2)} m/s · h = ${st.gate2Y.toFixed(2)} m` : gateLabel(st, st.gate2Y, 2),
+      );
     }
   });
-  // 支架高、摆锤落差大：俯角压到 12°，否则摆长和光电门间距会被压缩看不出来
-  setTarget(fitCamera(camera, boxOfSubject(scene), { pitch: 16, yaw: 0.3, fill: 0.95, margin: 0.015 }));
+  // 铁架台 0.97 m 高而横向只有 0.35 m：这是一根"细长条"，取景最容易翻车。
+  // fill 给到 0.95 时包围盒直接顶到画幅四边（透视 + 偏航还会溢出），立杆顶端与重锤落点被切；
+  // 满屏舞台下 0.88 + 0.04 边距正好：整根立杆、三个门头、底座全在画内且占满竖向。
+  setTarget(fitCamera(camera, boxOfSubject(scene), { pitch: 14, yaw: 0.28, fill: 0.88, margin: 0.04 }));
   return () => {};
 }

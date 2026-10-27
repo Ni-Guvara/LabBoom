@@ -17,7 +17,7 @@ interface Rec { id: number; mass: number; radius: number; omega: number; ft: num
 export default function L6Lab() {
   const [stage, setStage] = useState<Stage>('setup');
   const [mass, setMass] = useState(0.1);
-  const [radius, setRadius] = useState(0.12);
+  const [radius, setRadius] = useState(0.06);
   const [omega, setOmega] = useState(4);
   const [runId, setRunId] = useState(0);
   const [recs, setRecs] = useState<Rec[]>([]);
@@ -114,7 +114,7 @@ export default function L6Lab() {
         stage === 'setup' ? (
           <Panel title="布置 · 控制变量" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>F = mω²r</span>}>
             <Slider label="小球质量 m" value={mass} min={0.05} max={0.2} step={0.01} unit=" kg" onChange={setMass} />
-            <Slider label="转动半径 r" value={radius} min={0.05} max={0.15} step={0.01} unit=" m" onChange={setRadius} />
+            <Slider label="转动半径 r" value={radius} min={0.04} max={0.08} step={0.01} unit=" m" onChange={setRadius} />
             <Slider label="角速度 ω" value={omega} min={2} max={8} step={0.5} unit=" rad/s" onChange={setOmega} />
             <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
               理论向心力 F = <b style={{ color: 'var(--c-accent-2)' }}>{theoryForce(params).toFixed(3)}</b> N<br />
@@ -169,7 +169,11 @@ export default function L6Lab() {
               </tbody>
             </table>
           </div>
-          <div ref={chartEl} style={{ width: '100%', height: 190 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · F 与 mω²r">
+          <div ref={chartEl} style={{ width: '100%', height: 280 }} />
           <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>F 与 mω²r 成正比，各点应落在 y = x 上。</div>
         </Panel>
       }

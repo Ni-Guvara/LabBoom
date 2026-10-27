@@ -38,7 +38,9 @@ export function TopNav() {
 const topStyle: React.CSSProperties = {
   position: 'sticky', top: 0, zIndex: 50,
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  padding: '12px 28px', borderRadius: 0, borderBottom: '1px solid var(--glass-border)',
+  // 高度锁死 58：实验台用 calc(100dvh - 58px) 铺满视口，导航一改高度就会溢出滚动条
+  height: 58, boxSizing: 'border-box',
+  padding: '0 28px', borderRadius: 0, borderBottom: '1px solid var(--glass-border)',
   background: 'rgba(11,18,32,0.55)',
 };
 const brandStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, fontSize: 16 };

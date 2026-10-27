@@ -20,6 +20,12 @@ export type MatKind =
   | 'wood'
   | 'paper'
   | 'paintWhite'
+  /** 蓝漆铸铁（向心力演示器底座） */
+  | 'paintBlue'
+  /** 黄漆塔轮（向心力演示器皮带轮） */
+  | 'paintYellow'
+  /** 淡蓝灰亚克力（平抛接球槽，薄壁假透明） */
+  | 'acrylic'
   /** 实验台面：深灰环氧树脂板（比木色台面更能衬出器材） */
   | 'bench';
 
@@ -63,6 +69,12 @@ const SPECS: Record<MatKind, Spec> = {
   paper: { color: 0xc6bba0, metalness: 0.0, roughness: 0.95, env: 0.15, micro: 'paper' },
   // 白塑料件（计时器外壳/光电门）：env 从 0.7 降到 0.4，避免和纸一起糊成一块白斑
   paintWhite: { color: 0xd9dde1, metalness: 0.0, roughness: 0.58, env: 0.4, micro: 'plastic', clearcoat: 0.25 },
+  // 蓝漆铸铁（向心力演示器底座）：漆面偏哑，清漆层只留一点边角高光
+  paintBlue: { color: 0x1e6e8c, metalness: 0.0, roughness: 0.44, env: 0.3, micro: 'plastic', clearcoat: 0.3 },
+  // 黄漆塔轮：亮黄在主光下容易顶爆，env 压到 0.35 保住台阶分界
+  paintYellow: { color: 0xe0a81b, metalness: 0.0, roughness: 0.38, env: 0.35, micro: 'plastic', clearcoat: 0.35 },
+  // 亚克力接球槽：薄壁 + 淡蓝灰，靠透明度和边缘高光"假装"透明
+  acrylic: { color: 0xcfe3ee, metalness: 0.0, roughness: 0.1, env: 1.1, micro: 'none', clearcoat: 0.8 },
   // 台面：稍微降低粗糙度，让它映出一条柔光带 —— 大片空旷台面才不会变成一块死黑
   bench: { color: 0x23272c, metalness: 0.0, roughness: 0.72, env: 0.34, micro: 'plastic' },
 };

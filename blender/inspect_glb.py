@@ -12,8 +12,22 @@ inspect_glb.py —— 不依赖任何三方库，直接解析 .glb 校验产物�
 """
 
 import json
+import os
 import struct
 import sys
+
+# 原点不在底面的器材：夹持类器材是吊在半空被使用的，「位置 = 被测点」才是前端的摆放语义。
+#   drop_gate：原点 = 光轴与落体线交点，L7 直接 gate.position.y = 门高 摆上去，门本身不落地
+#   （整机 y_min 因此为负，属预期，不算违规）
+ORIGIN_EXEMPT = {
+    "drop_gate": "原点 = 光轴与落体线交点（夹持类器材不落地）",
+}
+
+# Windows 控制台默认 GBK，打印 ✓/✗ 会直接抛 UnicodeEncodeError 把校验报告打断
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 LIMIT_TRIS = 8000
 
@@ -134,8 +148,12 @@ def main():
 
     # ---- 断言 ----
     problems = []
-    if not (abs(lo[1]) < 1e-4):
-        problems.append(f"底面没落在 y=0，实际 y_min={lo[1]:.4f}（拖到台面会浮空或陷进去）")
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if abs(lo[1]) >= 1e-4:
+        if stem in ORIGIN_EXEMPT:
+            print(f"  · {ORIGIN_EXEMPT[stem]}，y_min={lo[1]:.4f} 属预期")
+        else:
+            problems.append(f"底面没落在 y=0，实际 y_min={lo[1]:.4f}（拖到台面会浮空或陷进去）")
     if len(mats) > 12:
         problems.append(f"材质 {len(mats)} 份，超过 12 —— 说明没复用，draw call 会偏高")
     if tris > LIMIT_TRIS:
@@ -152,7 +170,7 @@ def main():
         for p in problems:
             print("  ✗", p)
         sys.exit(1)
-    print("  ✓ 全部通过：命名齐全、底面 y=0、材质复用、面数在预算内")
+    print("  ✓ 全部通过：命名齐全、原点约定成立、材质复用、面数在预算内")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,8 @@ interface Row { n: number; F: number; x: number }
 export default function L2Lab() {
   const [hooks, setHooks] = useState(0);
   const k = 40;
-  const massPerHook = 0.1;
+  // Ø32×8 片状砝码 = 50 g（与模型一致）；挂满 6 片 Δx = 73.5 mm，肉眼可读
+  const massPerHook = 0.05;
   const g = 9.8;
   const [view, setView] = useState<'macro' | 'micro'>('macro');
   const [step, setStep] = useState(0);
@@ -95,20 +96,27 @@ export default function L2Lab() {
       stage={<SceneHost setup={setup} />}
       panel={
         <Panel title="参数面板 · 探究变量" right={<span className="en" style={{ color: 'var(--c-text-faint)', fontSize: 13 }}>F = kx</span>}>
-          <Slider label="挂钩码数 n" value={hooks} min={0} max={6} step={1} unit=" 个" onChange={(v) => { setHooks(v); if (step < 1) onFinishStep(1); }} />
+          <Slider label="砝码片数 n" value={hooks} min={0} max={6} step={1} unit=" 片" onChange={(v) => { setHooks(v); if (step < 1) onFinishStep(1); }} />
           <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.8 }}>
-            每砝码 m = {massPerHook} kg · g = {g} m/s²<br />
+            每砝码 m = {massPerHook} kg（50 g 片码）· g = {g} m/s²<br />
             劲度系数 k = {k} N/m（实验给定）<br />
             弹力 F = n·m·g = <b style={{ color: 'var(--c-accent)' }}>{F.toFixed(2)}</b> N<br />
-            伸长量 x = F/k = <b style={{ color: 'var(--c-accent-2)' }}>{x.toFixed(3)}</b> m
+            伸长量 x = F/k = <b style={{ color: 'var(--c-accent-2)' }}>{x.toFixed(3)}</b> m（{Math.round(x * 1000)} mm）<br />
+            <span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>
+              零点 = 挂空盘时指针位置（盘重已并入零点）
+            </span>
           </div>
           <button className="pill" style={{ alignSelf: 'flex-start', padding: '8px 18px', fontSize: 13 }} onClick={record} disabled={hooks === 0}>记录此组数据 →</button>
         </Panel>
       }
       dataArea={
-        <Panel title="实时数据 · F-x 图像" right={<span className="en-up" style={{ color: 'var(--c-accent-2)' }}>FIT</span>}>
+        <Panel title="数据记录 · F-x 数据" right={<span className="en-up" style={{ color: 'var(--c-accent-2)' }}>{rows.length} GROUP</span>}>
           <DataTable columns={['n', 'F/N', 'x/m']} rows={rows.map((r) => [r.n, r.F, r.x])} />
-          <div ref={chartRef} style={{ width: '100%', height: 200 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · F-x 图像" right={<span className="en-up" style={{ color: 'var(--c-accent-2)' }}>FIT</span>}>
+          <div ref={chartRef} style={{ width: '100%', height: 280 }} />
           {fit && (
             <div style={{ fontSize: 12.5, color: 'var(--c-text-dim)' }}>
               一键拟合：斜率 k ≈ <b style={{ color: 'var(--c-accent)' }}>{fit.a.toFixed(2)}</b> N/m，截距 ≈ {fit.b.toFixed(3)} N

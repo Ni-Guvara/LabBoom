@@ -1,4 +1,4 @@
-// 力学实验器具库（1 unit = 1 m，按厂商实测规格建模）
+﻿// 力学实验器具库（1 unit = 1 m，按厂商实测规格建模）
 // 尺寸来源：气垫导轨工作面 1200 mm / 脚距 600 mm / 进气口 φ30 mm / 滑行器 121 mm 155 g；
 // 轨道小车 J2183：轨长 900 mm、轨距 50 mm、小车 200±10 g、配块 10 g/50 g；
 // 电磁打点计时器 J0203：打点周期 0.02 s（50 Hz）、AC 6 V、外形 144×70×60 mm、配重阻力 ≤3 g。
@@ -56,8 +56,16 @@ export function textPlate(w: number, h: number, text: string, opts?: { bg?: stri
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     // 数字等宽：读数变化时文字不左右跳
-    ctx.font = `600 ${fontSize}px "JetBrains Mono", ui-monospace, monospace`;
-    ctx.fillText(s, canvas.width / 2, canvas.height / 2 + 4);
+    // 字号自适应：贴片越扁，死守 fontSize 就会把字裁成"半截"，先量宽高再缩
+    let fs = fontSize;
+    ctx.font = `600 ${fs}px "JetBrains Mono", ui-monospace, monospace`;
+    const maxW = canvas.width * 0.9;
+    const maxH = canvas.height * 0.66;
+    const need = ctx.measureText(s).width;
+    if (need > maxW) fs = Math.max(8, Math.floor((fs * maxW) / need));
+    if (fs > maxH) fs = Math.max(8, Math.floor(maxH));
+    ctx.font = `600 ${fs}px "JetBrains Mono", ui-monospace, monospace`;
+    ctx.fillText(s, canvas.width / 2, canvas.height / 2 + 2);
   };
   draw(text);
   const tex = new THREE.CanvasTexture(canvas);
@@ -202,7 +210,8 @@ export function cart(opts?: { mass?: number; flagWidth?: number }): THREE.Group 
   const flagWidth = opts?.flagWidth ?? 0.05;
   const post = solid(rb(0.004, 0.03, 0.004, 0.001), mat('steel'));
   post.position.set(0.02, 0.052, 0);
-  const flag = solid(rb(flagWidth, 0.028, 0.038, 0.0015), mat('plasticBlack'));
+  // 挡光片是薄片（z 向 3 mm）：光轴沿 z 穿过，38 mm 厚的块状挡光片既不真实也会蹭到门叉
+  const flag = solid(rb(flagWidth, 0.028, 0.003, 0.0012), mat('plasticBlack'));
   flag.position.set(0.02, 0.078, 0);
   flag.name = 'flag';
   g.add(post, flag);
@@ -288,58 +297,149 @@ export function tickerTimer(): THREE.Group {
   return g;
 }
 
-/** 光电门：U 形槽 50 mm、立杆可调（教学导轨上多用短立杆）、带红外窗口 */
-export function photogate(gap = 0.05, postHeight = 0.3): THREE.Group {
+/**
+ * 光电门（程序化回退版，与 blender/build_photogate.py 同尺寸同装配）
+ *
+ * 真机链路：台面 ─ 四只橡胶脚垫 ─ 铸铁底座 ─ 螺纹套+锁紧螺母 ─ Ø10 立杆（带刻度）
+ *          ─ 十字夹（滚花旋钮）─ Ø16×20 方管横臂 ─ 滑动夹块 ─ U 形叉口
+ *          （横梁 + 两垂臂 + 臂端管座 + 内侧红外窗 + 指示灯 + 斜置数显）
+ *
+ * 局部坐标：根节点在**底座底面中心**，立杆轴线在 x=z=0，
+ * 叉口中心（光轴所在竖直面）在 **z = +0.085**。整机摆到 z=-0.085 时叉口正落在导轨中线。
+ * 光轴高默认 0.204（挡光片中心随导轨抬起在 193~215 mm 之间，取中点）；
+ * 垂臂从横梁下沿挂到 0.085，正好夹在 90 mm 宽导轨两侧。
+ */
+export function photogate(gap = 0.115, postTop = 0.272): THREE.Group {
   const g = new THREE.Group();
-  const base = solid(new THREE.CylinderGeometry(0.032, 0.036, 0.008, 20), mat('steel'));
-  base.position.y = 0.004;
-  const post = solid(new THREE.CylinderGeometry(0.006, 0.006, postHeight, 12), mat('steel'));
-  post.position.y = postHeight / 2 + 0.008;
-  g.add(base, post);
+  // 真机三段关系：立杆顶露出十字夹 24 mm；横臂底面在光轴上方 34 mm
+  // （要容下挡光片 38 mm 高的上半段 + 导轨抬起量，否则挡光片会插进横臂）
+  const CLAMP_Y = postTop - 0.024;
+  const AXIS_Y = CLAMP_Y - 0.044;
+  const HEAD_Z = 0.085;
+  const ARM_BOT = Math.max(0.04, AXIS_Y - 0.119);
+  const FOOT_H = 0.004;
+  const BASE_H = 0.014;
+  const dark = mat('plasticBlack', { color: 0x39414c });
 
-  const head = new THREE.Group();
-  head.position.y = postHeight + 0.008;
-  // 顶梁必须留在「挡光片顶上」以上，两臂从梁两端垂下：中间是真正通透的光口。
-  // 原来是一整块实心方料，挡光片根本穿不过去 —— 远看像光电门，其实测不到东西。
-  const yoke = solid(rb(0.014, 0.022, gap + 0.024, 0.003), mat('plasticGray'));
-  yoke.position.y = 0.039;
-  head.add(yoke);
-  // 两臂（减去中间的槽，用两块板表达）
-  for (const sz of [-1, 1]) {
-    const arm = solid(rb(0.016, 0.03, 0.012, 0.002), mat('plasticGray'));
-    arm.position.set(0, 0.014, sz * (gap / 2 + 0.006));
-    head.add(arm);
-    const eye = solid(new THREE.SphereGeometry(0.0022, 10, 8), mat('plasticRed', { emissive: 0x551100 }));
-    eye.position.set(0.008, 0.006, sz * (gap / 2 + 0.004));
-    head.add(eye);
+  // 底座
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const foot = solid(new THREE.CylinderGeometry(0.006, 0.006, FOOT_H, 14), mat('rubber'));
+      foot.position.set(sx * 0.03, FOOT_H / 2, sz * 0.018);
+      g.add(foot);
+    }
   }
-  // 数显窗 + 指示灯：读数直接做在器材面板上（不走悬停标注）
-  const plate = textPlate(0.03, 0.011, '--', { fontSize: 88 });
-  plate.mesh.position.set(0, 0.030, gap / 2 + 0.0122);
-  head.add(plate.mesh);
-  const led = solid(new THREE.SphereGeometry(0.0021, 10, 8), mat('plasticRed', { emissive: 0x772211 }));
-  led.position.set(0, 0.043, gap / 2 + 0.0122);
-  head.add(led);
-  g.add(head);
-  // 立柱锁紧手轮 + 内侧高度刻度（光电门高度可调是实验的关键变量）
-  const knob = solid(new THREE.CylinderGeometry(0.0055, 0.0055, 0.005, 14), mat('plasticBlack'));
-  knob.rotation.z = Math.PI / 2;
-  knob.position.set(0.011, postHeight + 0.004, 0);
-  g.add(knob);
-  const tickMat2 = new THREE.MeshBasicMaterial({ color: 0x2b3038 });
-  for (let i = 0; i < Math.floor(postHeight / 0.02); i++) {
-    const t = new THREE.Mesh(new THREE.BoxGeometry(0.0006, 0.0007, i % 5 === 0 ? 0.005 : 0.0028), tickMat2);
-    t.position.set(0.0065, 0.012 + i * 0.02, 0);
+  const plate = solid(rb(0.09, BASE_H, 0.056, 0.0025), mat('plasticBlack'));
+  plate.position.y = FOOT_H + BASE_H / 2;
+  g.add(plate);
+  const lip = solid(rb(0.084, 0.005, 0.01, 0.0015), mat('plasticBlack'));
+  lip.position.set(0, FOOT_H + 0.0025, 0.023);
+  g.add(lip);
+  for (const sx of [-1, 1]) {
+    const screw = solid(new THREE.CylinderGeometry(0.0045, 0.0045, 0.012, 14), mat('steel'));
+    screw.position.set(sx * 0.03, FOOT_H + BASE_H + 0.004, 0.022);
+    g.add(screw);
+    const knurl = solid(new THREE.TorusGeometry(0.0048, 0.0011, 6, 16), mat('steel'));
+    knurl.rotation.x = Math.PI / 2;
+    knurl.position.set(sx * 0.03, FOOT_H + BASE_H + 0.0095, 0.022);
+    g.add(knurl);
+  }
+
+  // 立杆
+  const y0 = FOOT_H + BASE_H;
+  const collar = solid(new THREE.CylinderGeometry(0.0098, 0.0098, 0.016, 20), mat('steel'));
+  collar.position.y = y0 + 0.008;
+  g.add(collar);
+  const locknut = solid(new THREE.CylinderGeometry(0.0086, 0.0086, 0.005, 6), mat('steel'));
+  locknut.position.y = y0 + 0.0185;
+  g.add(locknut);
+  const post = solid(new THREE.CylinderGeometry(0.005, 0.005, postTop - y0 + 0.006, 18), mat('steel'));
+  post.position.y = (postTop + y0 - 0.006) / 2;
+  g.add(post);
+  const cap = solid(new THREE.CylinderGeometry(0.0062, 0.0062, 0.004, 16), mat('steel'));
+  cap.position.y = postTop + 0.002;
+  g.add(cap);
+  const tickMat = new THREE.MeshBasicMaterial({ color: 0x5b6570 });
+  const tickCount = Math.max(6, Math.floor((postTop - 0.07) / 0.01) + 1);
+  for (let i = 0; i < tickCount; i++) {
+    const t = new THREE.Mesh(
+      new THREE.BoxGeometry(i % 5 === 0 ? 0.009 : 0.005, 0.0008, 0.0006),
+      tickMat,
+    );
+    t.position.set(0, 0.05 + i * 0.01, 0.0054);
     g.add(t);
   }
-  g.userData.spec = { name: '光电门', size: [0.02, 0.36, gap + 0.03] } as PartSpec;
+
+  // 十字夹 + 横臂
+  const clamp = solid(rb(0.026, 0.026, 0.03, 0.002), mat('plasticGray'));
+  clamp.position.set(0, CLAMP_Y, 0);
+  g.add(clamp);
+  const knob = solid(new THREE.CylinderGeometry(0.008, 0.008, 0.009, 18), mat('steel'));
+  knob.rotation.z = Math.PI / 2;
+  knob.position.set(0.017, CLAMP_Y, 0);
+  g.add(knob);
+  const knobRing = solid(new THREE.TorusGeometry(0.0082, 0.0013, 6, 20), mat('steel'));
+  knobRing.rotation.y = Math.PI / 2;
+  knobRing.position.set(0.0195, CLAMP_Y, 0);
+  g.add(knobRing);
+  const beam = solid(rb(0.016, 0.02, 0.1445, 0.0018), mat('plasticGray'));
+  beam.position.set(0, CLAMP_Y, HEAD_Z);
+  g.add(beam);
+  const slider = solid(rb(0.028, 0.028, 0.024, 0.002), mat('plasticGray'));
+  slider.position.set(0, CLAMP_Y, 0.03);
+  g.add(slider);
+
+  // 叉口：两条垂臂 + 臂端管座 + 红外窗
+  const armH = CLAMP_Y - 0.01 - ARM_BOT;
+  for (const sz of [-1, 1]) {
+    const az = HEAD_Z + sz * (gap / 2 + 0.007);
+    const arm = solid(rb(0.012, armH, 0.014, 0.0015), dark);
+    arm.position.set(0, ARM_BOT + armH / 2, az);
+    g.add(arm);
+    const armCap = solid(rb(0.013, 0.006, 0.015, 0.0012), mat('plasticGray'));
+    armCap.position.set(0, ARM_BOT - 0.001, az);
+    g.add(armCap);
+    const inner = az - sz * 0.007;
+    const tube = solid(new THREE.CylinderGeometry(0.0042, 0.0042, 0.006, 12), dark);
+    tube.rotation.x = Math.PI / 2;
+    tube.position.set(0, AXIS_Y, inner - sz * 0.003);
+    g.add(tube);
+    const win = solid(new THREE.CircleGeometry(0.0034, 12), mat('glass'));
+    win.position.set(0, AXIS_Y, inner - sz * 0.0002);
+    win.rotation.y = sz > 0 ? 0 : Math.PI;
+    g.add(win);
+  }
+
+  // 指示灯 + 斜置数显（窗壳要凸出横臂顶面，否则读数被方管埋住）
+  const led = solid(new THREE.SphereGeometry(0.0021, 12, 8), mat('plasticRed', { emissive: 0x772211 }));
+  led.position.set(0, AXIS_Y - 0.014, HEAD_Z + gap / 2 + 0.007 + 0.0006);
+  g.add(led);
+  const TILT = 0.3;
+  const nY = Math.cos(TILT); // 窗面法线 (0, cos, sin)
+  const nZ = Math.sin(TILT);
+  const dispY = CLAMP_Y + 0.01;   // 横臂顶面
+  const dispZ = HEAD_Z + 0.004;
+  const bezel = solid(rb(0.042, 0.006, 0.016, 0.0012), mat('plasticGray'));
+  bezel.rotation.x = TILT;
+  bezel.position.set(0, dispY, dispZ);
+  g.add(bezel);
+  const face = solid(rb(0.036, 0.0012, 0.013, 0.0004), mat('plasticBlack'));
+  face.rotation.x = TILT;
+  face.position.set(0, dispY + nY * 0.0036, dispZ + nZ * 0.0036);
+  g.add(face);
+  const plateTxt = textPlate(0.036, 0.012, '--', { fontSize: 92 });
+  plateTxt.mesh.rotation.x = -Math.PI / 2 + TILT;
+  plateTxt.mesh.position.set(0, dispY + nY * 0.0045, dispZ + nZ * 0.0045);
+  g.add(plateTxt.mesh);
+
+  g.userData.spec = { name: '光电门', size: [0.09, postTop + 0.028, 0.186] } as PartSpec;
   g.userData.gap = gap;
-  // 头部是独立子组：真机用 C 形夹卡在导轨侧面、横臂把镜头臂送到轨道上方，
-  // 调用方需要能把头部挪到别处（见 L1/scene.ts），所以把引用暴露出来。
-  g.userData.head = head;
-  g.userData.setReadout = (text: string) => plate.setText(text);
+  g.userData.axisY = AXIS_Y;
+  g.userData.headZ = HEAD_Z;
+  g.userData.setReadout = (text: string) => plateTxt.setText(text);
   return g;
 }
+
 
 /** 定滑轮（φ50 mm）+ 台边夹持座 */
 export function pulley(): THREE.Group {
@@ -469,6 +569,73 @@ export function weightStack(masses: number[] = [0.05]): THREE.Group {
   g.userData.totalMass = masses.reduce((a, b) => a + b, 0);
   /** 顶环高度：外部细线要接到这里，接在盘沿上就会"断" */
   g.userData.hangerY = WIRE_TOP;
+  return g;
+}
+
+/**
+ * 砂桶（图 13，L4 主器材）：白 PP 锥台桶 φ90×70 + 四绳吊环 + 桶内细砂。
+ *
+ * 原点 = 吊环中心（竖直细线接到这里），桶身全在原点下方 —— 下落时不会与木板/台面打架。
+ * setMass(m0) 按细砂堆积密度反推沙面高度：面板改 m0 时，学生能看到沙子真的在变多变少。
+ * 锥形沙堆是这件器材的辨识点，别改成平面。
+ */
+export function sandBucket(): THREE.Group {
+  const g = new THREE.Group();
+  const RIM_Y = -0.030;   // 桶口（吊环下方 30 mm）
+  const DEPTH = 0.070;    // 桶深
+  const R_TOP = 0.045;
+  const R_BOT = 0.038;
+  const WALL = 0.002;
+
+  // 吊环（细线挂这里）
+  const ring = solid(new THREE.TorusGeometry(0.009, 0.0016, 8, 18), mat('steel'));
+  g.add(ring);
+
+  // 四根吊绳：桶沿四孔汇到顶环
+  const wireMat = mat('steel', { color: 0xd7dde3 });
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const p0 = new THREE.Vector3(sx * 0.005, -0.001, sz * 0.005);
+      const p1 = new THREE.Vector3(sx * R_TOP * 0.82, RIM_Y, sz * R_TOP * 0.82);
+      const d = new THREE.Vector3().subVectors(p1, p0);
+      const wire = solid(new THREE.CylinderGeometry(0.0007, 0.0007, 1, 6), wireMat);
+      wire.position.copy(p0).addScaledVector(d, 0.5);
+      wire.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+      wire.scale.set(1, d.length(), 1);
+      g.add(wire);
+    }
+  }
+
+  // 桶身（上大下小的锥台）+ 外翻口沿 + 桶底
+  const body = solid(new THREE.CylinderGeometry(R_TOP, R_BOT, DEPTH, 28), mat('paintWhite'));
+  body.position.y = RIM_Y - DEPTH / 2;
+  g.add(body);
+  const rim = solid(new THREE.TorusGeometry(R_TOP, 0.0026, 8, 30), mat('paintWhite'));
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = RIM_Y;
+  g.add(rim);
+  const bottom = solid(new THREE.CylinderGeometry(R_BOT, R_BOT, 0.003, 28), mat('plasticGray'));
+  bottom.position.y = RIM_Y - DEPTH;
+  g.add(bottom);
+
+  // 细砂：圆柱 + 锥顶（体积随 m0 变，沙面高度是给学生看的第二重读数）
+  const SAND_R = R_BOT - WALL - 0.001;
+  const SAND_BOTTOM = RIM_Y - DEPTH + 0.003;
+  const sandMat = mat('paper', { color: 0xc9a878, roughness: 0.99 });
+  const sandCol = solid(new THREE.CylinderGeometry(SAND_R, SAND_R, 1, 26), sandMat);
+  const sandCone = solid(new THREE.ConeGeometry(SAND_R, 1, 26), sandMat);
+  g.add(sandCol, sandCone);
+
+  g.userData.spec = { name: '砂桶', size: [R_TOP * 2, -RIM_Y + DEPTH, R_TOP * 2] } as PartSpec;
+  g.userData.setMass = (m: number) => {
+    // 细砂堆积密度 1600 kg/m³：0.02 kg ≈ 3 mm 薄层，0.20 kg ≈ 33 mm
+    const h = Math.max(0.002, Math.min(DEPTH - 0.006, m / (1600 * Math.PI * SAND_R * SAND_R)));
+    sandCol.scale.y = h;
+    sandCol.position.y = SAND_BOTTOM + h / 2;
+    const ch = Math.min(0.012, SAND_R * 0.55);
+    sandCone.scale.y = ch;
+    sandCone.position.y = SAND_BOTTOM + h + ch / 2;
+  };
   return g;
 }
 

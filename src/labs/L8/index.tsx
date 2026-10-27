@@ -160,8 +160,12 @@ export default function L8Lab() {
           title="实时数据 · i-t / u-t"
           right={<button onClick={() => downloadCSV('L8_rc.csv', ['t/s', 'u/V', 'i/mA'], points.map((p) => [p.t, p.u, p.i]))} style={{ background: 'transparent', border: '1px solid var(--glass-border)', color: 'var(--c-text-dim)', borderRadius: 8, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>导出 CSV</button>}
         >
-          <div ref={chartRef} style={{ width: '100%', height: 190 }} />
           <DataTable columns={['t/s', 'u/V', 'i/mA']} rows={points.map((p) => [p.t, p.u, p.i])} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · i-t / u-t">
+          <div ref={chartRef} style={{ width: '100%', height: 280 }} />
         </Panel>
       }
       conclusion={

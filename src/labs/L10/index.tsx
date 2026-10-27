@@ -118,7 +118,11 @@ export default function L10Lab() {
           right={<button onClick={() => downloadCSV('L10_ui.csv', ['I/A', 'U/V', 'R/Ω'], rows.map((r) => [r.I, r.U, r.R]))} style={{ background: 'transparent', border: '1px solid var(--glass-border)', color: 'var(--c-text-dim)', borderRadius: 8, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>导出 CSV</button>}
         >
           <DataTable columns={['R滑/Ω', 'I/A', 'U/V', 'U/I /Ω']} rows={rows.map((r) => [r.Rs, r.I, r.U, r.R])} />
-          <div ref={chartRef} style={{ width: '100%', height: 180 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · U-I 图线">
+          <div ref={chartRef} style={{ width: '100%', height: 280 }} />
           {fit && (
             <div style={{ fontSize: 12.5, color: 'var(--c-text-dim)', lineHeight: 1.8 }}>
               斜率即 R测 = <b style={{ color: 'var(--c-accent)' }}>{fit.a.toFixed(3)}</b> Ω（R²≈{fit.r2.toFixed(3)}）<br />

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as echarts from 'echarts';
 import { SceneHost, type SceneApi } from '@/engine/SceneHost';
-import { buildL3Scene, measured, resultant, type L3Params, type L3State } from './scene';
+import buildL3Scene, { measured, resultant, type L3Params, type L3State } from './scene';
 import { LabFrame } from '@/labs/_template/LabFrame';
 import { Slider, Panel } from '@/primitives/Primitives';
 import { downloadCSV } from '@/utils/fit';
@@ -18,11 +18,28 @@ export default function L3Lab() {
   const [stage, setStage] = useState<Stage>('setup');
   const [f1, setF1] = useState(3);
   const [f2, setF2] = useState(4);
-  const [deg, setDeg] = useState(90);
+  // 两只表各自的方向角（度，绕 +Y，正角偏向 +Z）。对称摆放时 a1 = θ/2、a2 = −θ/2；
+  // 直接在台面上拖动某只表会单独改它，夹角 θ 由 |a1 − a2| 派生 —— 这样拖出来的
+  // 平行四边形可以不对称，和真实实验里"两只表各拉各的方向"一致。
+  const [a1, setA1] = useState(45);
+  const [a2, setA2] = useState(-45);
+  const deg = Math.round(Math.abs(a1 - a2));
   const [runId, setRunId] = useState(0);
   const [recs, setRecs] = useState<Rec[]>([]);
 
   const params: L3Params = { f1, f2, deg };
+
+  /** 拖动回写：把指针落点解出的方向角写进状态；两只表至少隔 12°，别叠成一摞 */
+  const dragScale = (i: 0 | 1, ang: number) => {
+    const v = Math.max(-80, Math.min(80, ang));
+    if (i === 0) {
+      if (Math.abs(v - a2) < 12) return;
+      setA1(v);
+    } else {
+      if (Math.abs(v - a1) < 12) return;
+      setA2(v);
+    }
+  };
 
   const markStep = useProgressStore((s) => s.markStep);
   const recordLab = useProgressStore((s) => s.recordLab);
@@ -34,7 +51,8 @@ export default function L3Lab() {
   const commitRef = useRef<() => void>(() => {});
 
   stateRef.current = {
-    ...params, stage, progress: 0, runId,
+    ...params, stage, progress: 0, runId, a1, a2,
+    onScaleDrag: dragScale,
     onProgress: (p) => { if (bar.current) bar.current.style.width = `${(p * 100).toFixed(0)}%`; },
     onFinish: () => commitRef.current(),
   };
@@ -47,6 +65,25 @@ export default function L3Lab() {
   };
 
   useEffect(() => { markStep('L3', STAGE_LABEL[stage]); }, [stage, markStep]);
+
+  // 测量动画：0.9 s 内把读数从 0 推到目标值，进度条同步走满后再落数据。
+  // 这里用 rAF 直接写 stateRef（不 setState），否则每帧重渲染会把场景重建；
+  // scene 每帧从 getState() 读到 progress，指针和读数牌就跟着走。
+  useEffect(() => {
+    if (stage !== 'run') return;
+    const DURATION = 900;
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = () => {
+      const p = Math.min(1, (performance.now() - t0) / DURATION);
+      if (stateRef.current) stateRef.current.progress = p;
+      if (bar.current) bar.current.style.width = `${(p * 100).toFixed(0)}%`;
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else commitRef.current();
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [stage, runId]);
 
   const start = () => {
     setRunId((r) => r + 1);
@@ -112,12 +149,23 @@ export default function L3Lab() {
       panel={
         stage === 'setup' ? (
           <Panel title="布置 · 三力平衡" right={<span className="en" style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>F=√(F₁²+F₂²+2F₁F₂cosθ)</span>}>
-            <Slider label="F₁" value={f1} min={1} max={6} step={0.5} unit=" N" onChange={setF1} />
-            <Slider label="F₂" value={f2} min={1} max={6} step={0.5} unit=" N" onChange={setF2} />
-            <Slider label="两力夹角 θ" value={deg} min={30} max={150} step={5} unit="°" onChange={setDeg} />
+            <Slider label="F₁" value={f1} min={1} max={5} step={0.5} unit=" N" onChange={setF1} />
+            <Slider label="F₂" value={f2} min={1} max={5} step={0.5} unit=" N" onChange={setF2} />
+            <Slider
+              label="两力夹角 θ"
+              value={deg}
+              min={30}
+              max={150}
+              step={5}
+              unit="°"
+              onChange={(d) => { setA1(d / 2); setA2(-d / 2); }}
+            />
             <div style={{ fontSize: 13, color: 'var(--c-text-dim)', lineHeight: 1.9 }}>
               平行四边形定则：F合 = <b style={{ color: 'var(--c-accent-2)' }}>{resultant(params).toFixed(3)}</b> N<br />
               用第三只测力计沿反方向把结点拉到同一点（等效替代），读数即合力实测值。
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>
+              也可以直接拖动台面上的 F₁ / F₂ 测力计改它自己的方向，两只表不对称时合力会偏离中线。
             </div>
             <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>至少做 3 组不同夹角的数据，才能看出规律。</div>
             <button className="pill" style={{ alignSelf: 'flex-start', padding: '9px 20px', fontSize: 13 }} onClick={start}>开始测量 →</button>
@@ -167,7 +215,11 @@ export default function L3Lab() {
               </tbody>
             </table>
           </div>
-          <div ref={chartEl} style={{ width: '100%', height: 190 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · F合实测 vs 理论">
+          <div ref={chartEl} style={{ width: '100%', height: 280 }} />
           <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>实测点应落在 y = x 上，偏离即测量系统误差。</div>
         </Panel>
       }

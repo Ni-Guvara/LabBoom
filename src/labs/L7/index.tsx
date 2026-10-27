@@ -202,7 +202,11 @@ export default function L7Lab() {
               </tbody>
             </table>
           </div>
-          <div ref={chartEl} style={{ width: '100%', height: 200 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · ΔEp vs ΔEk">
+          <div ref={chartEl} style={{ width: '100%', height: 280 }} />
           <div style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>所有点应落在 y = x 上（虚线）；偏离即系统误差。</div>
         </Panel>
       }

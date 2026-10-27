@@ -101,7 +101,11 @@ export default function L12Lab() {
           right={<button onClick={() => downloadCSV('L12_ui.csv', ['R/Ω', 'I/A', 'U/V'], rows.map((r) => [r.R, r.I, r.U]))} style={{ background: 'transparent', border: '1px solid var(--glass-border)', color: '#8ca0b8', borderRadius: 8, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>导出 CSV</button>}
         >
           <DataTable columns={['R/Ω', 'I/A', 'U/V']} rows={rows.map((r) => [r.R, r.I, r.U])} />
-          <div ref={chartRef} style={{ width: '100%', height: 190 }} />
+        </Panel>
+      }
+      chart={
+        <Panel title="数据绘图 · U-I 图线">
+          <div ref={chartRef} style={{ width: '100%', height: 280 }} />
           {fit && Efit !== null && rFit !== null && (
             <div style={{ fontSize: 12.5, color: 'var(--c-text-dim)', lineHeight: 1.8 }}>
               当 I→0（外电路断开）U = 纵轴截距 = <b style={{ color: 'var(--c-accent)' }}>E ≈ {Efit.toFixed(3)} V</b>；

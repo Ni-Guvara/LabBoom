@@ -19,6 +19,9 @@ from mathutils import Vector
 def reset_scene() -> None:
     """清空出厂场景（background 模式默认带 Cube/Camera/Light）。"""
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    # read_factory_settings 会销毁所有数据块，_MATS 里缓存的旧指针随之失效
+    # （再取就和 StructRNA removed 撞上），一个进程导多个 glb 时必须清掉。
+    _MATS.clear()
 
 
 def srgb_to_linear(c: float) -> float:
@@ -111,6 +114,21 @@ def mat_glass():
     return mat_pbr("glass", 0xDFEEFC, 0.0, 0.08)
 
 
+def mat_paint_blue():
+    # 蓝漆铸铁底座（向心力演示器）：漆层比塑料更哑、带一点清漆光泽
+    return mat_pbr("paintBlue", 0x1E6E8C, 0.0, 0.44, 0.30)
+
+
+def mat_paint_yellow():
+    # 黄漆塔轮：亮黄容易被主光顶爆，粗糙度压到 0.38 留一点高光带
+    return mat_pbr("paintYellow", 0xE0A81B, 0.0, 0.38, 0.35)
+
+
+def mat_acrylic():
+    # 透明亚克力（平抛接球槽）：不透明材质 + 淡蓝灰，靠薄壁和边缘高光"假装"透明
+    return mat_pbr("acrylic", 0xCFE3EE, 0.0, 0.10, 0.10)
+
+
 # ---------- 几何 ----------
 
 
@@ -143,7 +161,12 @@ def box(name: str, size, center, mat, bevel: float = 0.0, segments: int = 3):
         m.segments = segments
         m.limit_method = "ANGLE"
         bpy.context.view_layer.objects.active = o
-        bpy.ops.object.modifier_apply(modifier=m.name)
+        # 极薄板（厚度与倒角同量级）上 bevel 会退化，Blender 直接拒绝 apply；
+        # 这种零件的倒角本来也看不见，静默跳过即可，不要中断整条构建链。
+        try:
+            bpy.ops.object.modifier_apply(modifier=m.name)
+        except RuntimeError:
+            o.modifiers.remove(m)
     return _finish(o, name, mat, smooth=False)
 
 

@@ -1,18 +1,36 @@
-// L5 场景：研究平抛运动（斜槽 + 钢球 + 5 cm 方格描迹板）
-// 斜槽末端水平，小球离槽后 x=v0·t、y=Y0-½gt²；频闪点落在竖直描迹板上留痕
+// L5 场景：研究平抛运动（平抛实验器 —— 斜槽 + 双标尺白板 + 全宽接球槽）
+//
+// 器材是 blender/build_throw.py 出的 thrower.glb，本文件只负责三件事：
+//   ① 把 canvas 画的两条刻度尺（顶部横尺 / 左侧竖尺）贴到 glb 的白漆标尺底板上；
+//   ② 沿 glb 斜槽的几何把钢球摆到释放点、滚到出口；
+//   ③ 离槽后按 x=v₀t、y=Y₀−½gt² 飞，落到接球槽台面上停住，沿途留频闪点。
+//
+// 坐标对齐（three 里 +Z 朝观察者，glb 的 Blender −Y 前面 = three +Z）：
+//   槽底高 0.247、槽中线 z = −0.050、出口 x = −0.090、槽宽 30 mm → 配 Ø16 球。
 import * as THREE from 'three';
 import type { SceneApi } from '@/engine/SceneHost';
 import { mat } from '@/engine/materials';
 import { tableTop } from '@/labs/_shared/instruments';
 import { fitCamera, boxOf } from '@/labs/_shared/framing';
+import { loadOrFallback } from '@/labs/_shared/models';
 
 export const G = 9.8;
 export const STROBE = 0.05;
-export const Y0 = 0.34; // 抛出点高度（球心）
-export const BALL_R = 0.008;
+export const BALL_R = 0.008; // 槽宽 30 mm，球用 Ø16，两侧各留 7 mm 余量
+export const Y0 = 0.255; // 抛出口（球心）高度 = 槽底 0.247 + 球半径
+export const LAND_Y = 0.082; // 接球槽台面 0.074 + 球半径
+export const EXIT_X = -0.09; // 斜槽水平段出口
+export const FLIGHT_Z = -0.05; // 球飞行的竖直平面（glb 斜槽中线）
 
-const RAMP_ANG = (35 * Math.PI) / 180;
-const RAMP_LEN = 0.46;
+/** 斜槽几何：折弯点 → 顶端，与 build_throw.py 的 CHUTE_X1 / RAMP_TOP 同源 */
+const KNEE = { x: -0.205, y: 0.255 };
+const TOP = { x: -0.32, y: 0.402 };
+const LEVEL_LEN = KNEE.x - EXIT_X; // 0.115 水平导出段
+const RAMP_DX = KNEE.x - TOP.x;
+const RAMP_DY = TOP.y - KNEE.y;
+const RAMP_SIN = RAMP_DY / Math.hypot(RAMP_DX, RAMP_DY); // ≈0.787，52°
+
+const ROLL_T = 0.3; // 球从释放点滚到出口的过场时间（纯视觉，不参与读数）
 
 export interface L5Params {
   releaseH: number; // 斜槽上释放高度
@@ -28,22 +46,19 @@ export interface L5State extends L5Params {
   onFinish: () => void;
 }
 
-/** 斜槽末端速度：由能量关系 v0 = √(2gH·η)，η 为滚阻/转动损耗 */
+/** 离槽速度：v₀ = √(2gH·η)，η 为滚阻/转动惯量损耗 */
 export function v0Of(p: L5Params): number {
   return Math.sqrt(2 * G * Math.max(0.02, p.releaseH) * 0.8);
 }
 
-/**
- * 落地时刻：球心落到离桌面一个半径时即触地（原来按 y=0 判定，
- * 球心到 0 意味着半个球已经沉进桌面，看起来就是"穿模到地里"）。
- */
+/** 球心从出口落到接球槽台面的时间 */
 export function flightTime(): number {
-  return Math.sqrt((2 * (Y0 - BALL_R)) / G);
+  return Math.sqrt((2 * (Y0 - LAND_Y)) / G);
 }
 
 export interface Dot { t: number; x: number; y: number }
 
-/** 频闪点：x = v0·t，y = Y0 − ½gt² */
+/** 频闪点：x = v₀t（离槽后的水平位移），y = Y₀ − ½gt² */
 export function strobeDots(p: L5Params): Dot[] {
   const v0 = v0Of(p);
   const tf = flightTime();
@@ -55,128 +70,157 @@ export function strobeDots(p: L5Params): Dot[] {
   return out;
 }
 
-export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void {
+/** 释放点：斜槽上比出口高 h 的那一点（h 越大越靠顶端） */
+function releasePoint(h: number) {
+  const t = THREE.MathUtils.clamp((RAMP_DY - h) / RAMP_DY, 0, 1);
+  return { x: TOP.x + t * RAMP_DX, y: TOP.y - t * RAMP_DY };
+}
+
+/**
+ * 刻度尺贴片：白漆底板上只压一层墨线，底板本身由 glb 出。
+ * 横向尺从顶边垂刻度、数字在刻度下方；竖向尺从左边伸刻度、数字竖排在右侧。
+ */
+function rulerMesh(w: number, h: number, vertical: boolean, cmCount = 28): THREE.Mesh {
+  const long = 2560;
+  const short = 340;
+  const canvas = document.createElement('canvas');
+  canvas.width = vertical ? short : long;
+  canvas.height = vertical ? long : short;
+  const ctx = canvas.getContext('2d')!;
+
+  const len = vertical ? canvas.height : canvas.width; // 刻度方向
+  const thick = vertical ? canvas.width : canvas.height; // 尺宽方向
+  const pad = len * 0.035;
+  const span = len - pad * 2;
+  const ink = '#23292f';
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.lineCap = 'butt';
+  ctx.strokeStyle = ink;
+  ctx.fillStyle = ink;
+
+  // 刻度长度按尺宽定：主刻度 0.38、半厘米 0.24、毫米 0.13，剩下 0.6 留给数字
+  for (let i = 0; i <= cmCount * 10; i++) {
+    const p = pad + (i / (cmCount * 10)) * span;
+    const major = i % 10 === 0;
+    const mid = i % 5 === 0;
+    const t = major ? thick * 0.38 : mid ? thick * 0.24 : thick * 0.13;
+    ctx.lineWidth = major ? 4 : mid ? 3 : 2;
+    ctx.beginPath();
+    if (vertical) {
+      const y = canvas.height - p; // 0 在下：canvas y 轴朝下
+      ctx.moveTo(0, y);
+      ctx.lineTo(t, y);
+    } else {
+      ctx.moveTo(p, 0);
+      ctx.lineTo(p, t);
+    }
+    ctx.stroke();
+  }
+
+  // 字高必须小于刻度间距（横尺 1 cm 只有 ~12.5 mm，28 个数字挤在一排）
+  const fs = Math.round(thick * 0.17);
+  ctx.font = `600 ${fs}px "JetBrains Mono", ui-monospace, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let c = 0; c <= cmCount; c++) {
+    const p = pad + (c / cmCount) * span;
+    const label = String(c);
+    if (vertical) {
+      const y = canvas.height - p;
+      ctx.save();
+      ctx.translate(thick * 0.5, y);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillText(label, p, thick * 0.38 + thick * 0.21);
+    }
+  }
+  // 单位标记
+  ctx.textAlign = vertical ? 'left' : 'right';
+  ctx.font = `600 ${Math.round(fs * 0.95)}px "JetBrains Mono", ui-monospace, monospace`;
+  if (vertical) ctx.fillText('cm', thick * 0.52, thick * 0.42);
+  else ctx.fillText('cm', canvas.width - pad * 0.3, thick * 0.38 + thick * 0.21);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, h),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }),
+  );
+  mesh.renderOrder = 2;
+  return mesh;
+}
+
+/** glb 加载失败时的程序化替身：底板 + 白板 + 一段斜槽，保证实验照样能跑 */
+function fallbackRig(): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'thrower-fallback';
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.03, 0.3), mat('steel', { color: 0xdfe3e6, roughness: 0.5 }));
+  base.position.y = 0.015;
+  base.castShadow = true;
+  g.add(base);
+  const board = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.34, 0.012), mat('steel', { color: 0xe4e7e9, roughness: 0.5 }));
+  board.position.set(0, 0.2, -0.089);
+  board.castShadow = true;
+  g.add(board);
+  const tray = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.008, 0.13), mat('steel', { color: 0xe4e7e9, roughness: 0.5 }));
+  tray.position.set(0, 0.07, -0.01);
+  g.add(tray);
+  const lv = new THREE.Mesh(new THREE.BoxGeometry(LEVEL_LEN, 0.01, 0.03), mat('aluminum'));
+  lv.position.set((EXIT_X + KNEE.x) / 2, 0.2495, FLIGHT_Z);
+  g.add(lv);
+  return g;
+}
+
+export async function buildL5Scene(api: SceneApi, getState: () => L5State): Promise<() => void> {
   const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
 
-  const table = tableTop(2.4, 2.4);
-  scene.add(table);
+  scene.add(tableTop(2.4, 2.4));
 
-  // 整套器材放进一个 rig：布置阶段可以整体挪位置，运行阶段锁定
   const rig = new THREE.Group();
   rig.name = 'rig';
   scene.add(rig);
-  // 斜槽 + 钢球 + 描迹板是一套：布置阶段整体可摆，抛出点与落点一起挪，轨迹才是自洽的
+  // 整套器材作为一个整体：布置阶段可以挪桌子上的位置，运行阶段锁定
   draggable(rig, { plane: 'floor', canDrag: () => getState().stage === 'setup' });
 
-  // ---------- 斜槽：倾斜段 + 末端水平导出段 ----------
-  // 平抛的前提是"离槽速度水平"。原来末端就是 35° 斜坡，球出槽是斜向下飞的，
-  // 不构成平抛；这里在出口补 160 mm 水平直段，球在该段走完时速度已完全水平。
-  const EXIT = 0.16;
-  const ramp = new THREE.Group();
-  // 槽底面 = 球心高度 − 球半径：球在水平段滚动时球心正好在 Y0，离槽后 y(t)=Y0−½gt²
-  const RAIL_Y = Y0 - BALL_R - 0.003;
+  const model = await loadOrFallback('thrower', fallbackRig);
+  rig.add(model.root);
 
-  // 水平导出段：x ∈ [-EXIT, 0]
-  const exitTrough = new THREE.Mesh(new THREE.BoxGeometry(EXIT, 0.006, 0.046), mat('aluminum'));
-  exitTrough.position.set(-EXIT / 2, RAIL_Y, 0);
-  exitTrough.castShadow = true;
-  ramp.add(exitTrough);
-  for (const side of [-1, 1]) {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(EXIT, 0.016, 0.004), mat('aluminum'));
-    wall.position.set(-EXIT / 2, RAIL_Y + 0.011, side * 0.025);
-    ramp.add(wall);
-  }
-  // 出口端唇口（略微外翻，避免球在端头被台阶磕一下）
-  const lip = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.004, 0.046), mat('aluminum'));
-  lip.position.set(0.002, RAIL_Y - 0.001, 0);
-  ramp.add(lip);
-
-  // 倾斜段：从水平段左端 (-EXIT, RAIL_Y) 向斜上方
-  const cx = -EXIT - Math.cos(RAMP_ANG) * (RAMP_LEN / 2);
-  const cy = RAIL_Y + Math.sin(RAMP_ANG) * (RAMP_LEN / 2);
-  const trough = new THREE.Mesh(new THREE.BoxGeometry(RAMP_LEN, 0.006, 0.046), mat('aluminum'));
-  trough.position.set(cx, cy, 0);
-  trough.rotation.z = -RAMP_ANG;
-  trough.castShadow = true;
-  ramp.add(trough);
-  for (const side of [-1, 1]) {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(RAMP_LEN, 0.018, 0.004), mat('aluminum'));
-    wall.position.set(cx, cy + 0.003, side * 0.025);
-    wall.rotation.z = -RAMP_ANG;
-    ramp.add(wall);
-  }
-  // 斜面顶端小挡板（限位，保证每次同一位置释放）
-  const stopper = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.02, 0.05), mat('plasticRed'));
-  stopper.position.set(cx - Math.cos(RAMP_ANG) * (RAMP_LEN / 2) + 0.004, cy + Math.sin(RAMP_ANG) * (RAMP_LEN / 2) + 0.004, 0);
-  ramp.add(stopper);
-
-  // 支腿：竖直撑到桌面；水平段下方也要有支腿，否则出口是悬空的
-  const topAt = (x: number) => (x >= -EXIT ? RAIL_Y : RAIL_Y + (-x - EXIT) * Math.tan(RAMP_ANG));
-  const legAt = (x: number) => {
-    const h = topAt(x) - 0.008;
-    if (h <= 0.02) return;
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.006, h, 12), mat('steel'));
-    leg.position.set(x, h / 2, 0);
-    ramp.add(leg);
-    const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.006, 16), mat('steel'));
-    foot.position.set(x, 0.003, 0);
-    ramp.add(foot);
-  };
-  legAt(-0.05);
-  legAt(-EXIT - 0.16);
-  legAt(-EXIT - 0.34);
-  rig.add(ramp);
-  const rampAnchor = addAnchor(ramp, '斜槽（末端水平段 160 mm）');
+  // ---------- 两条刻度尺（glb 只做了白漆底板，刻度与数字在这里画）----------
+  const rulerTop = rulerMesh(0.352, 0.042, false);
+  rulerTop.position.set(0, 0.335, -0.0862);
+  rig.add(rulerTop);
+  const rulerSide = rulerMesh(0.028, 0.3, true);
+  rulerSide.position.set(-0.16, 0.21, -0.0862);
+  rig.add(rulerSide);
 
   // ---------- 钢球 ----------
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 18), mat('steel', { roughness: 0.22 }));
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 26, 20), mat('steel', { roughness: 0.2 }));
   ball.castShadow = true;
   rig.add(ball);
   const ballAnchor = addAnchor(ball, '钢球 φ16 mm');
 
-  // ---------- 竖直描迹板（球后侧，5 cm 方格） ----------
-  const boardGrp = new THREE.Group();
-  const BOARD_X0 = -0.02;
-  const BOARD_W = 0.66;
-  const BOARD_H = 0.42;
-  // 描图纸不是纯白：0xf1ede4 在 2.15 的主光下会直接顶到 255 成一整块白板，
-  // 方格线和纸纤维全部消失。压到米黄色后才有纸的层次。
-  const panel = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, BOARD_H, 0.008), mat('paper', { color: 0xd8d1bd }));
-  panel.position.set(BOARD_X0 + BOARD_W / 2, BOARD_H / 2, -0.05);
-  panel.receiveShadow = true;
-  boardGrp.add(panel);
-
-  const base = new THREE.Mesh(new THREE.BoxGeometry(BOARD_W, 0.02, 0.07), mat('wood', { color: 0x6f4b2c }));
-  base.position.set(BOARD_X0 + BOARD_W / 2, 0.01, -0.05);
-  boardGrp.add(base);
-
-  // 线必须离开纸面 3 mm：只差 1 mm 时和板面前表面 z-fighting，方格线会被纸"吃掉"
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x5d6874, transparent: true, opacity: 0.8 });
-  const pts: THREE.Vector3[] = [];
-  const zLine = -0.043;
-  for (let i = 0; i <= 18; i++) {
-    const x = BOARD_X0 + i * 0.05;
-    if (x > BOARD_X0 + BOARD_W + 1e-6) break;
-    pts.push(new THREE.Vector3(x, 0.02, zLine), new THREE.Vector3(x, BOARD_H, zLine));
-  }
-  for (let j = 0; j <= 8; j++) {
-    const y = j * 0.05;
-    pts.push(new THREE.Vector3(BOARD_X0, y, zLine), new THREE.Vector3(BOARD_X0 + BOARD_W, y, zLine));
-  }
-  boardGrp.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat));
-  rig.add(boardGrp);
-  addAnchor(panel, '描迹板（5 cm 方格）');
-
-  // 取景：斜槽 + 描迹板一起入画。俯角放小一点（描迹板是竖直的，太俯就看不见方格）
-  setTarget(fitCamera(camera, boxOf(ramp, ball, boardGrp), { pitch: 21, yaw: 0.3, fill: 0.86, margin: 0.02 }));
+  // 斜槽读数挂在斜槽中段上方的空锚点上（不挡器材本体）
+  const chuteAnchorObj = new THREE.Object3D();
+  chuteAnchorObj.position.set(-0.2, 0.31, FLIGHT_Z);
+  rig.add(chuteAnchorObj);
+  const chuteAnchor = addAnchor(chuteAnchorObj, '斜槽');
 
   // ---------- 频闪留痕 ----------
-  const dotGeo = new THREE.SphereGeometry(0.005, 10, 8);
-  const dotMat = new THREE.MeshStandardMaterial({ color: 0xd93b3b, roughness: 0.7 });
+  // 用蓝色小点：白板上本来就有 4 个红/绿按扣，频闪点原先也是红的，
+  // 混在一起分不清哪个是器材、哪个是轨迹留痕。蓝色 + 略发光 = 明确是"电子标记"。
+  const dotGeo = new THREE.SphereGeometry(0.0038, 10, 8);
+  const dotMat = new THREE.MeshStandardMaterial({ color: 0x2ba6ff, roughness: 0.5, emissive: 0x0b3f66 });
   let dots: THREE.Mesh[] = [];
-  const clearDots = () => { for (const d of dots) rig.remove(d); dots = []; };
+  const clearDots = () => {
+    for (const d of dots) rig.remove(d);
+    dots = [];
+  };
 
-  let simT = 0;
+  let clock = 0; // 运行总时钟（含滚落过场）
   let lastRun = -1;
   let lastStep = 0;
   let finished = false;
@@ -187,49 +231,83 @@ export function buildL5Scene(api: SceneApi, getState: () => L5State): () => void
     if (st.runId !== lastRun) {
       lastRun = st.runId;
       lastStep = st.stepToken;
-      simT = 0;
+      clock = 0;
       finished = false;
       shot = 0;
       clearDots();
     }
+
     const tf = flightTime();
-    if (st.stage === 'run' && !st.paused) {
-      simT = Math.min(tf, simT + dt * st.speed);
-      st.onProgress(simT);
+    const h = st.releaseH;
+    const v0 = v0Of(st);
+    const rel = releasePoint(h);
+
+    if (st.stage === 'setup') {
+      // 布置态：球停在释放点，读数清零
+      ball.position.set(rel.x, rel.y, FLIGHT_Z);
+      setAnchorText(chuteAnchor, `斜槽释放高度 h = ${(h * 1000).toFixed(0)} mm · v₀ = ${v0.toFixed(2)} m/s`);
+      setAnchorText(ballAnchor, `钢球 φ16 mm · 待释放`);
+      return;
     }
+
+    if (!st.paused) clock = Math.min(ROLL_T + tf, clock + dt * st.speed);
     if (st.stepToken !== lastStep) {
       lastStep = st.stepToken;
-      simT = Math.min(tf, simT + STROBE);
-      st.onProgress(simT);
+      clock = Math.min(ROLL_T + tf, clock + STROBE);
     }
-    if (st.stage === 'run' && simT >= tf - 1e-9 && !finished) {
+
+    // 滚落段：沿斜槽加速滑到出口（纯视觉过场，不产生频闪点）
+    const rollT = Math.min(clock, ROLL_T);
+    const p = rollT / ROLL_T;
+    const s = p * p * (h / RAMP_SIN + LEVEL_LEN);
+    const l1 = h / RAMP_SIN;
+    let bx: number;
+    let by: number;
+    if (s < l1 && l1 > 1e-6) {
+      const k = s / l1;
+      bx = rel.x + (KNEE.x - rel.x) * k;
+      by = rel.y + (KNEE.y - rel.y) * k;
+    } else {
+      bx = KNEE.x + Math.min(LEVEL_LEN, s - l1);
+      by = Y0;
+    }
+
+    const t = Math.max(0, clock - ROLL_T); // 离槽后的飞行时间
+    if (clock > ROLL_T) {
+      bx = EXIT_X + v0 * t;
+      by = Math.max(LAND_Y, Y0 - 0.5 * G * t * t); // 落到接球槽后停住
+    }
+    ball.position.set(bx, by, FLIGHT_Z);
+
+    if (st.stage === 'run') st.onProgress(Math.min(t, tf));
+
+    setAnchorText(chuteAnchor, `斜槽释放高度 h = ${(h * 1000).toFixed(0)} mm · v₀ = ${v0.toFixed(2)} m/s`);
+    setAnchorText(
+      ballAnchor,
+      `钢球 φ16 mm · x = ${((bx - EXIT_X) * 1000).toFixed(0)} mm · y = ${(by * 1000).toFixed(0)} mm`,
+    );
+
+    // 频闪点：只在离槽之后留，x 从出口起算
+    if (clock > ROLL_T) {
+      while (shot * STROBE <= t + 1e-9 && shot < 20) {
+        const tt = shot * STROBE;
+        const d = new THREE.Mesh(dotGeo, dotMat);
+        d.position.set(EXIT_X + v0 * tt, Math.max(LAND_Y, Y0 - 0.5 * G * tt * tt), FLIGHT_Z);
+        rig.add(d);
+        dots.push(d);
+        shot++;
+      }
+    }
+
+    if (st.stage === 'run' && clock >= ROLL_T + tf - 1e-9 && !finished) {
       finished = true;
       st.onFinish();
     }
-
-    const v0 = v0Of(st);
-    const t = simT;
-    // 触地后停在桌面上，不再继续往下沉
-    const yBall = Math.max(BALL_R, Y0 - 0.5 * G * t * t);
-    ball.position.set(v0 * t, yBall, 0);
-
-    // 布置参数变化 → 器材数值同步
-    setAnchorText(rampAnchor, `斜槽 h = ${(st.releaseH * 1000).toFixed(0)} mm · v₀ = ${v0.toFixed(2)} m/s`);
-    setAnchorText(
-      ballAnchor,
-      `钢球 φ16 mm · y = ${(yBall * 1000).toFixed(0)} mm · v = ${Math.hypot(v0, G * t).toFixed(2)} m/s`,
-    );
-
-    while (shot * STROBE <= simT + 1e-9 && shot < 20) {
-      const tt = shot * STROBE;
-      const d = new THREE.Mesh(dotGeo, dotMat);
-      d.position.set(v0 * tt, Math.max(BALL_R, Y0 - 0.5 * G * tt * tt), 0.004);
-      rig.add(d);
-      dots.push(d);
-      shot++;
-    }
   });
 
-  clearDots();
+  // 取景：整机 539×300×432 mm，俯 19° 才看得进斜槽槽口，几乎正对板面（偏航只留 0.10）
+  setTarget(fitCamera(camera, boxOf(rig), { pitch: 19, yaw: 0.1, fill: 0.88, margin: 0.02 }));
+
+  ball.position.set(releasePoint(getState().releaseH).x, releasePoint(getState().releaseH).y, FLIGHT_Z);
   return () => { clearDots(); };
 }

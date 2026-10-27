@@ -38,7 +38,8 @@ try {
     });
     page.on('pageerror', (e) => pageErrors.push(`${id}: ${e.message}`));
 
-    await page.goto(`${BASE}/#/lab/${id}`, { waitUntil: 'domcontentloaded' });
+    // ?cover=1 让场景用「封面构图」：按卡片 2:1 居中裁切的取景，器材纵向居中
+    await page.goto(`${BASE}/?cover=1#/lab/${id}`, { waitUntil: 'domcontentloaded' });
     // 页面里还有 ECharts 的 canvas，用 data-engine 精确锁定 three.js 画布
     await page.waitForSelector(CANVAS, { timeout: 30000 });
     // 等环境贴图（PMREM）、阴影、bloom 第一帧稳定

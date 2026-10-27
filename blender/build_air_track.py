@@ -142,13 +142,14 @@ def build_sled():
     P = []
     half = SLED_LEN / 2
 
-    # --- 倒 V 槽薄壁：内壁与导轨斜面平行（40.6°），壁厚 3 mm ---
+    # --- 倒 V 槽薄壁：内壁与导轨斜面平行（40.6°），壁厚 2.5 mm（实测，原 3 mm 偏厚）---
+    WALL = 0.0025
     slope = math.tan(SLOPE_ANG)                          # dz/dy
     in_tip_z = 0.0   # 原点必须严格落在 V 尖（= 与导轨的接触点），气膜间隙在装配时给
     in_end_z = SLED_HALF * slope + in_tip_z              # 内壁在 ±31 mm 处的高度
-    out_tip_z = in_tip_z + 0.003 / math.cos(SLOPE_ANG)   # 尖端沿竖直方向量 3 mm
-    out_end_y = SLED_HALF - 0.003 * math.sin(SLOPE_ANG)
-    out_end_z = in_end_z + 0.003 * math.cos(SLOPE_ANG)
+    out_tip_z = in_tip_z + WALL / math.cos(SLOPE_ANG)    # 尖端沿竖直方向量 2.5 mm
+    out_end_y = SLED_HALF - WALL * math.sin(SLOPE_ANG)
+    out_end_z = in_end_z + WALL * math.cos(SLOPE_ANG)
 
     profile = [
         (0.0, in_tip_z),
@@ -162,19 +163,23 @@ def build_sled():
     P.append(prism("body_v", profile, SLED_LEN, 0.0, mat_aluminum(), bevel=0.0))
 
     # --- 上部配重槽（U 形，开口朝上）---
+    # 口沿 1 mm 倒角：两侧外沿各切一刀，去掉「方盒感」（原模型没倒角，槽口是硬直角）
+    CH = 0.001
     box_profile = [
         (-SLED_HALF, SLED_TRAY_BOT),
         (SLED_HALF, SLED_TRAY_BOT),
-        (SLED_HALF, SLED_TRAY_TOP),
-        (SLED_HALF - 0.003, SLED_TRAY_TOP),
-        (SLED_HALF - 0.003, SLED_TRAY_BOT + 0.003),
-        (-(SLED_HALF - 0.003), SLED_TRAY_BOT + 0.003),
-        (-(SLED_HALF - 0.003), SLED_TRAY_TOP),
-        (-SLED_HALF, SLED_TRAY_TOP),
+        (SLED_HALF, SLED_TRAY_TOP - CH),
+        (SLED_HALF - CH, SLED_TRAY_TOP),               # ← 右侧口沿倒角
+        (SLED_HALF - WALL, SLED_TRAY_TOP),
+        (SLED_HALF - WALL, SLED_TRAY_BOT + WALL),
+        (-(SLED_HALF - WALL), SLED_TRAY_BOT + WALL),
+        (-(SLED_HALF - WALL), SLED_TRAY_TOP),
+        (- (SLED_HALF - CH), SLED_TRAY_TOP),           # ← 左侧口沿倒角
+        (-SLED_HALF, SLED_TRAY_TOP - CH),
     ]
     # 配重槽与 V 槽同色同料：真实滑行器是整体铝合金挤压件，不是黑塑料盒
     P.append(prism("body_tray", box_profile, SLED_LEN - 0.006, 0.0,
-                   mat_aluminum(), bevel=0.0006))
+                   mat_aluminum(), bevel=0.0015))
 
     # --- 配重片（50 g，落在槽底）---
     P.append(box("weight", (0.040, 0.030, 0.005), (0, 0, 0.0315), mat_steel(), bevel=0.0008))
@@ -187,8 +192,9 @@ def build_sled():
 
     # --- 两端缓冲头 + 挂钩 ---
     for sx, tag in ((-1, "l"), (1, "r")):
+        # 端部缓冲头圆角提到 R4：原 R2 让整机看着像方盒（规格书要求箱体四角 R5 的观感）
         P.append(box(f"bumper_{tag}", (0.010, 0.052, 0.036), (sx * (half - 0.005), 0, 0.044),
-                     mat_plastic_black(), bevel=0.002))
+                     mat_plastic_black(), bevel=0.004))
         P.append(torus(f"hook_{tag}", 0.0045, 0.0011, (sx * (half + 0.003), 0, 0.040),
                        mat_steel(), axis="Y", seg=14))
 

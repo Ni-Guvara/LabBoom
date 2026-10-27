@@ -29,3 +29,9 @@ scripts/_dbg.mjs
 scripts/probe-*.mjs
 scripts/shot-*.mjs
 scripts/verify-*.mjs
+
+# 验收截图与临时抓图脚本（封面裁切复检、器材特写等，不进仓库）
+.tmp-shots/
+
+# 教材参考图素材（17 MB，只作建模比对用，文档里保留结论即可）
+docs/ref-mechanics/

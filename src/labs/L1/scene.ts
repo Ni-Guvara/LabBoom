@@ -3,8 +3,13 @@
 import * as THREE from 'three';
 import type { SceneApi } from '@/engine/SceneHost';
 import { mat } from '@/engine/materials';
-import { airTrack, cart, tickerTimer, photogate, tableTop, TAPE_INTERVAL } from '@/labs/_shared/instruments';
+import {
+  airTrack, cart, tickerTimer, photogate, tableTop, TAPE_INTERVAL,
+} from '@/labs/_shared/instruments';
 import { fitCamera, boxOfSubject } from '@/labs/_shared/framing';
+import {
+  PHOTOGATE_TALL, GATE_HEAD_Z, attachGateReadout, gateAxisY,
+} from '@/labs/_shared/photogate';
 import { loadOrFallback, partOf, hideParts } from '@/labs/_shared/models';
 import { simulate, sampleAt, gateReadings, type MotionModel, type Sample } from '@/engine/physics/kinematics';
 
@@ -13,7 +18,15 @@ export const RAIL_LEN = 1.2;
 export const SURFACE_Y = 0.11;
 export const START_U = -0.42; // 滑行器起点（导轨局部坐标）
 export const TRAVEL = 0.84;
-export const GATE_U = 0.06;
+/**
+ * 光电门默认停在导轨中段。
+ * 注意 u 是「导轨坐标」：0 = 导轨左端、RAIL_LEN = 右端，中部就是 RAIL_LEN/2。
+ * 场景里光电门挂在 scene 上（不跟导轨抬头），世界 x = u − U0。
+ */
+export const GATE_U = 0.6;
+/** 光电门可调的行程：两端各留 0.15 m，正好覆盖滑行器 0.84 m 的整个行程 */
+export const GATE_MIN_U = 0.18;
+export const GATE_MAX_U = 1.02;
 export const CART_MASS = 0.155;
 /** 挡光片中心相对滑行器中心（build_air_track.py 里 flag 立在 x = +20 mm） */
 export const FLAG_CENTER = 0.020;
@@ -33,7 +46,9 @@ export function flagLead(flagWidth: number): number {
  * 测速点整体往后挪了一截。
  */
 export function gateOffset(flagWidth: number, gateU = GATE_U): number {
-  return gateU - START_U - flagLead(flagWidth);
+  // gateU 是导轨坐标（0 = 左端），START_U 是世界 x；先减 U0 统一到世界坐标再作差。
+  // 少了这一步，光轴会被算到滑行器起点左侧 0.6 m 之外，读数永远是 0。
+  return gateU - U0 - START_U - flagLead(flagWidth);
 }
 
 export interface L1Params {
@@ -80,11 +95,12 @@ const TAPE_SEG = 72;           // 纸带网格分段数
 export async function buildL1Scene(api: SceneApi, getState: () => L1State): Promise<() => void> {
   const { scene, camera, addAnchor, setAnchorText, onTick, draggable, setTarget } = api;
 
-  // 三件器材并行加载：glb 是 Blender 建的写实模型；哪件还没建模就回退到程序化模型
-  const [railModel, sledModel, timerModel] = await Promise.all([
+  // 四件器材并行加载：glb 是 Blender 建的写实模型；哪件还没建模就回退到程序化模型
+  const [railModel, sledModel, timerModel, gateModel] = await Promise.all([
     loadOrFallback('air_track', () => airTrack(RAIL_LEN)),
     loadOrFallback('sled', () => cart({ mass: CART_MASS, flagWidth: 0.02 })),
     loadOrFallback('ticker_timer', () => tickerTimer()),
+    loadOrFallback('photogate', () => photogate()),
   ]);
 
   // ---------- 台面 ----------
@@ -133,6 +149,9 @@ export async function buildL1Scene(api: SceneApi, getState: () => L1State): Prom
   timer.name = 'ticker';
   let timerU = -0.585; // 再往左就压到起点位置的滑行器尾钩了
   hideParts(timerModel, 'tape'); // 模型自带的纸带是定长的一段，会横穿滑行器
+  // 模型自带的两根电源线是笔直的短段，末端悬在台面上方、谁也不接，
+  // 近看像插进桌面的红绿棍子。没有电源箱可接，索性不显示（接线柱仍在）。
+  hideParts(timerModel, 'wire_');
   const bracket = new THREE.Group();
   // C 形夹板：横板托住机身 + 一条窄立筋卡在导轨端面。立筋别做宽 —— 100 mm 宽的
   // 板在侧视角下就是一块大黑板，器材看着像挂在墙上。
@@ -290,45 +309,41 @@ export async function buildL1Scene(api: SceneApi, getState: () => L1State): Prom
   };
 
   // ---------- 光电门（导轨中段，测挡光时间） ----------
-  // 真机是 C 形夹卡在导轨侧面、一根横臂把镜头臂送到轨道上方。原来直接立在轨道中线上：
-  // 立柱要穿过铝型材，头部还压在挡光片上方 6 cm —— 挡光片从下面过去了，什么也没测到。
-  const GATE_GAP = 0.075; // 开口 75 mm：滑行器本体 62 mm 要能过
+  // 真机：整机立在台面上，方管横臂横跨导轨，U 形叉口从两侧夹住导轨
+  // （叉口净宽 115 mm > 导轨 90 mm），光轴 193 mm 正好落在挡光片中心。
+  // 底座在导轨后侧 z=-0.085，门头中心在模型局部 z=+0.085 → 叉口正落在导轨中线 z=0。
   let gateU = getState().gateU ?? GATE_U;
-  const gate = photogate(GATE_GAP, 0.208);
+  const gate = gateModel.root;
   gate.name = 'gate';
-  gate.position.set(gateU - U0, 0, -0.125); // 立柱落在导轨后侧的台面上
-  const gateHead = gate.userData.head as THREE.Group;
-  gateHead.position.set(0, 0.187, 0.125); // 镜头臂移到轨道中线，光轴对准挡光片中段
-  const gateArm = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.02, 0.13), mat('plasticGray'));
-  gateArm.position.set(0, 0.226, 0.065); // 与顶梁同高，从立柱伸到镜头臂
-  gateArm.castShadow = true;
-  gate.add(gateArm);
-  pivot.add(gate);
+  gate.position.set(gateU - U0, 0, -0.085);
+  // 注意：光电门是**立在台面上**的独立器材，不属于会抬头的导轨组，
+  // 所以挂在 scene 上而不是 pivot 上，垫片抬高时它不会跟着倾斜。
+  scene.add(gate);
   const gateAnchor = addAnchor(gate, '光电门 v = d/Δt');
-  const gateReadout = gate.userData.setReadout as ((t: string) => void) | undefined;
+  // 光电门沿导轨挪位：只放开 x 一个自由度，范围与右侧滑杆一致。
+  // 松开手后 onGateChange 把新位置回写到面板参数，读数（挡光时刻）随之重解。
+  api.enableDrag();
+  draggable(gate, {
+    axis: 'x',
+    min: GATE_MIN_U - U0,
+    max: GATE_MAX_U - U0,
+    canDrag: () => getState().stage === 'setup',
+    onMove: (pos) => { getState().onGateChange(pos.x + U0); },
+  });
+  // 读数贴片与光轴高度都来自共用规格（src/labs/_shared/photogate.ts）：
+  // glb 不烘文字，运行时贴一块动态数显；程序化回退版自带贴片，helper 内部会判重。
+  const gateReadout = attachGateReadout(gate, PHOTOGATE_TALL);
+  const GATE_AXIS_Y = gateAxisY(PHOTOGATE_TALL);
 
   // 红外光束：两臂之间横穿光口。挡光片进来才熄灭，学生一眼能看出「什么时候在测」
+  const GATE_GAP = PHOTOGATE_TALL.gap; // 叉口净宽（导轨 90 mm 两侧各留 12.5 mm）
   const beamMat = new THREE.MeshBasicMaterial({
     color: 0xff4033, transparent: true, opacity: 0.55, depthWrite: false,
   });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.0009, 0.0009, GATE_GAP, 6), beamMat);
   beam.rotation.x = Math.PI / 2;
-  beam.position.set(0.004, 0.006, 0);
-  gateHead.add(beam);
-
-  draggable(gate, {
-    axis: 'x',
-    min: -0.40 - U0,
-    max: 0.45 - U0,
-    canDrag: () => getState().stage === 'setup',
-    onMove: (pos) => {
-      const u = pos.x + U0;
-      if (Math.abs(u - gateU) < 1e-4) return;
-      gateU = u;
-      solveGate();
-      getState().onGateChange(u);
-    },
-  });
+  beam.position.set(0.004, GATE_AXIS_Y, GATE_HEAD_Z);
+  gate.add(beam);
 
   // ---------- 纸带上的点迹 ----------
   const dotMat = new THREE.MeshBasicMaterial({ color: 0x14181d });
@@ -363,7 +378,7 @@ export async function buildL1Scene(api: SceneApi, getState: () => L1State): Prom
   let gateDt = 0;
   function solveGate() {
     const st = getState();
-    const x = gateU - START_U - flagLead(st.flagWidth);
+    const x = gateOffset(st.flagWidth, gateU);
     const rd = gateReadings(st.samples, [{ id: 'G1', x, flagWidth: st.flagWidth }])[0];
     gateIn = rd?.tIn ?? Infinity;
     gateOut = rd?.tOut ?? Infinity;
@@ -447,11 +462,8 @@ export async function buildL1Scene(api: SceneApi, getState: () => L1State): Prom
     sled.position.set(START_U + cur.x - U0, SURFACE_Y, 0);
     gate.position.x = gateU - U0;
     timer.position.x = timerU - U0;
-    // 落地补偿：立柱下沉到台面，头部高度保持不变（光轴仍对准挡光片中段）
-    const gateDrop = benchYAt(gateU - U0);
-    gate.position.y = gateDrop;
-    gateHead.position.y = 0.187 - gateDrop;
-    gateArm.position.y = 0.226 - gateDrop;
+    // 光电门立在台面上、不属于导轨组，底座高度恒为 0，不随垫片变化
+    gate.position.y = 0;
     web.position.y = benchYAt(timerU - U0) - SURFACE_Y + 0.052;
     buildTape(cur.x);
 
@@ -505,7 +517,20 @@ export async function buildL1Scene(api: SceneApi, getState: () => L1State): Prom
   // 导轨是 1.2 m 长条，靠俯角/占比两个参数定构图：俯角小才能看清导轨侧面的金属高光
   // 俯角 16° 太平：三角型材被压成一条平板、滑行器的 V 槽完全看不见。
   // 26° 是「看得清截面 + 不失长条器材透视感」的折中。
-  setTarget(fitCamera(camera, boxOfSubject(scene), { pitch: 26, yaw: 0.06, fill: 0.94, margin: 0.02 }));
+  //
+  // 封面构图（?cover=1，scripts/capture-covers.mjs）：卡片 327×149 约 2.2:1，
+  // 只取画布中间一条横带。按整幅画幅留白时，横带上方会剩一大片空背景、
+  // 导轨压在横带下沿。于是封面模式抬高俯角（多露台面、少露黑背景）、
+  // 填满度拉满，再把观察中心下压，让导轨落到横带正中。
+  const forCover = new URLSearchParams(window.location.search).has('cover');
+  const target = fitCamera(camera, boxOfSubject(scene), {
+    pitch: forCover ? 33 : 26,
+    yaw: forCover ? 0.14 : 0.06,
+    fill: forCover ? 0.98 : 0.94,
+    margin: forCover ? 0.005 : 0.02,
+  });
+  if (forCover) target.y -= 0.045;
+  setTarget(target);
 
   bindFlag();
   rebuild();

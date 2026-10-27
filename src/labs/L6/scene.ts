@@ -1,10 +1,13 @@
-// L6 场景：探究向心力大小与质量、半径、角速度的关系（向心力演示器）
-// 转盘带动小球做圆周运动，弹簧测力计读取向心力 F = mω²r
+// L6 场景：探究向心力大小与质量、半径、角速度的关系（手摇式向心力演示器）
+// 机身（箱式蓝漆底座 / 五级阶梯塔轮 / 红圆皮带 / 黑立柱 + 柱脚弹簧 / 手轮摇把）
+// 来自 centripetal.glb；两根横臂 + 球座 + 钢球 + 测力套筒是程序化的：
+// 它们要随轴转动、随半径参数滑动、随读数移动指针。
 import * as THREE from 'three';
 import type { SceneApi } from '@/engine/SceneHost';
 import { mat, contactShadow } from '@/engine/materials';
 import { tableTop, textPlate } from '@/labs/_shared/instruments';
 import { fitCamera, boxOfSubject } from '@/labs/_shared/framing';
+import { loadOrFallback } from '@/labs/_shared/models';
 
 export interface L6Params {
   mass: number; // kg
@@ -23,131 +26,199 @@ export function theoryForce(p: L6Params): number {
   return p.mass * p.omega * p.omega * p.radius;
 }
 
-/** 弹簧测力计读数（含 −2% 系统差，指针抖动已取平均） */
+/** 测力读数（含 −2% 系统差，指针抖动已取平均） */
 export function measuredForce(p: L6Params): number {
   return theoryForce(p) * (1 - 0.02);
 }
 
-export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void {
+// ---------- 机身尺寸：与 blender/build_centripetal.py 的常量一一对应（单位 m）----------
+// 底座顶面 BASE_TOP = 0.108（箱式铸件：22 mm 顶盖 + 78 mm 方腿 + 8 mm 地脚），
+// 塔轮顶 PULLEY_TOP = 0.1655，皮带 BELT_Z = 0.1383 —— 本文件只需要横臂以上的尺寸。
+// 底座顶面 BASE_TOP = 0.108（箱式铸件：22 mm 顶盖 + 78 mm 方腿 + 8 mm 地脚），
+// 塔轮顶 PULLEY_TOP = 0.1655，皮带 BELT_Z = 0.1383 —— 本文件只需要横臂以上的尺寸。
+const COL_X = 0.13; // 两立柱轴线（x = ±COL_X）
+const ARM_Y = 0.176; // 横臂中心高度 = glb 抱箍高度（塔轮顶 0.144 + 柱脚弹簧 23 mm）
+// 横臂横跨立柱：外侧 0.110（球座行程到 80 mm + 球座后半截），内侧 0.050（刻度 + 斜撑）。
+// 两臂都朝外伸，扫过半径 0.110 < 柱距 0.26，反向转动时永不干涉。
+const ARM_OUT = 0.110;
+const ARM_IN = 0.050;
+const ARM_H = 0.016; // 臂厚
+const ARM_W = 0.040; // 臂宽（进深）—— 必须 < 抱箍 Ø43，臂才能从箍里穿出
+const HUB_R = 0.0215; // 转轴座半径（包住 Ø26 立柱）
+const LINE_X0 = 0.024; // 拉线起点：轴座外壁
+const R_MIN = 0.040; // 球座最近：球内缘 0.025，越过轴座 0.0215
+const R_MAX = 0.080; // 球座最远：滑块外沿 0.106 < 臂端 0.110
+const BALL_R0 = 0.017; // m = 100 g 时的钢球半径（Ø34）
+
+/** 一条横臂：臂身横跨立柱 + 顶面/侧面 mm 刻度 + 斜撑 + 球座（局部 +x 朝外） */
+function buildArm() {
+  const g = new THREE.Group();
+  const black = mat('plasticBlack');
+  const steel = mat('steel', { roughness: 0.24 });
+  const tickMat = new THREE.MeshBasicMaterial({ color: 0xd7dee6 });
+  const inkMat = new THREE.MeshBasicMaterial({ color: 0x2b3038 });
+  const redMat = mat('plasticRed', { emissive: 0x330000 });
+
+  // 臂身横跨立柱：外侧长段给球座走行程，内侧留一小段带刻度和斜撑。
+  // 参考件正是这个比例——刻度画在靠柱的一段，球在臂上滑动读半径。
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(ARM_IN + ARM_OUT, ARM_H, ARM_W), black);
+  arm.position.set((ARM_OUT - ARM_IN) / 2, ARM_Y, 0);
+  arm.castShadow = true;
+  arm.receiveShadow = true;
+  g.add(arm);
+
+  // 斜撑：参考件里横臂与立柱之间那块三角形铁板，直角贴柱、斜边朝臂端
+  const gusShape = new THREE.Shape();
+  gusShape.moveTo(-0.010, 0);
+  gusShape.lineTo(-ARM_IN + 0.006, 0);
+  gusShape.lineTo(-0.010, 0.046);
+  gusShape.lineTo(-0.010, 0);
+  const gus = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(gusShape, { depth: 0.010, bevelEnabled: true, bevelSize: 0.0010, bevelThickness: 0.0010, bevelSegments: 1 }),
+    black,
+  );
+  gus.position.set(0, ARM_Y + ARM_H / 2, -0.005);
+  gus.castShadow = true;
+  g.add(gus);
+
+  // 臂侧毫米刻度：0–130 mm，每 10 mm 一条，50/100 mm 加长（读的就是转动半径 r）
+  for (const sz of [-1, 1]) {
+    for (let i = -4; i <= 12; i++) {
+      const major = i % 5 === 0;
+      const t = new THREE.Mesh(new THREE.BoxGeometry(0.0012, major ? 0.014 : 0.009, 0.0006), tickMat);
+      t.position.set(i * 0.01, ARM_Y + (major ? 0.001 : 0), sz * (ARM_W / 2 + 0.0004));
+      g.add(t);
+    }
+  }
+
+  // 转轴座：竖直圆筒套在立柱上，横臂从筒壁穿出（这一段随臂一起转）
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(HUB_R, HUB_R, 0.026, 32), black);
+  hub.position.set(0, ARM_Y, 0);
+  hub.castShadow = true;
+  g.add(hub);
+  const lockScrew = new THREE.Mesh(new THREE.CylinderGeometry(0.0030, 0.0030, 0.008, 12), steel);
+  lockScrew.rotation.x = Math.PI / 2;
+  lockScrew.position.set(0, ARM_Y + 0.006, -(HUB_R + 0.002));
+  g.add(lockScrew);
+
+  // ---------- 球座：骑在臂上的滑块 + 外侧立板 + 顶部鞍形挡块 ----------
+  // 参考件的关键特征：钢球贴在立板的**立柱侧**，立板顶部那块「两翼上翘、中间
+  // 下凹」的鞍形件从上方兜住球，侧面两颗银色压紧螺柱。早前做成"小塔 + 圆托环"，
+  // 读出来是一颗球放在烛台上，完全没有测力环压头的意思。
+  const slider = new THREE.Group();
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.005, ARM_W + 0.006), black);
+  plate.position.set(0.008, ARM_H / 2 + 0.0025, 0);
+  plate.castShadow = true;
+  slider.add(plate);
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.030, ARM_W), black);
+  post.position.set(0.0195, ARM_H / 2 + 0.005 + 0.015, 0);
+  post.castShadow = true;
+  slider.add(post);
+
+  // 鞍形挡块：底面平、顶面中间下凹两侧上翘 —— 从侧面看就是一个「马鞍」
+  const sadShape = new THREE.Shape();
+  sadShape.moveTo(-0.015, 0);
+  sadShape.lineTo(0.023, 0);
+  sadShape.lineTo(0.023, 0.018);
+  sadShape.quadraticCurveTo(0.004, 0.006, -0.015, 0.018);
+  sadShape.lineTo(-0.015, 0);
+  const saddle = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(sadShape, { depth: 0.011, bevelEnabled: true, bevelSize: 0.0009, bevelThickness: 0.0009, bevelSegments: 1 }),
+    black,
+  );
+  saddle.position.set(0, ARM_H / 2 + 0.005 + 0.030, -0.0055);
+  saddle.castShadow = true;
+  slider.add(saddle);
+
+  // 立板正面两颗压紧螺柱（参考件上银色螺杆朝观察者支出）
+  for (const dz of [0.0205, 0.0335]) {
+    const stud = new THREE.Mesh(new THREE.CylinderGeometry(0.0030, 0.0030, 0.016, 12), steel);
+    stud.rotation.x = Math.PI / 2;
+    stud.position.set(0.0195, ARM_H / 2 + 0.030, dz - ARM_W / 2);
+    slider.add(stud);
+    const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.0042, 0.0042, 0.004, 12), steel);
+    knob.rotation.x = Math.PI / 2;
+    knob.position.set(0.0195, ARM_H / 2 + 0.030, dz - ARM_W / 2 + 0.009);
+    slider.add(knob);
+  }
+
+  // 球座侧面的红色游标线：对着臂侧刻度，读出的就是 r
+  for (const sz of [-1, 1]) {
+    const mk = new THREE.Mesh(new THREE.BoxGeometry(0.0016, 0.012, 0.0007), redMat);
+    mk.position.set(0, ARM_H / 2 + 0.006, sz * (ARM_W / 2 + 0.0026));
+    slider.add(mk);
+  }
+
+  // 钢球：球心就在滑块原点，所以 slider.position.x = r 时 r 即真实半径；
+  // 球底压在臂面上（y = ARM_H/2 + ballR，随质量变化由 layout() 每帧更新）
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R0, 28, 20), steel);
+  ball.position.set(0, ARM_H / 2 + BALL_R0, 0);
+  ball.castShadow = true;
+  slider.add(ball);
+  g.add(slider);
+
+  // 拉线：球座内沿 → 套筒外端（沿臂侧走，长度随 r 变化）
+  const line = new THREE.Mesh(new THREE.BoxGeometry(1, 0.0016, 0.0016), inkMat);
+  line.position.set(0.05, ARM_Y - 0.0075, -ARM_W / 2 - 0.0018);
+  g.add(line);
+
+  return { g, slider, ball, line };
+}
+
+export async function buildL6Scene(api: SceneApi, getState: () => L6State): Promise<() => void> {
   const { scene, camera, addAnchor, setAnchorText, draggable, onTick, setTarget } = api;
-  // 取景在文件末尾统一按器材包围盒计算（fitCamera）
 
-  const table = tableTop(2.4, 2.4);
-  scene.add(table);
+  scene.add(tableTop(2.4, 2.4));
 
-  // 整套器材放进一个 rig：布置阶段可以整体挪位置，运行阶段锁定
+  // 整机放进 rig：布置阶段可以整体挪，运行阶段锁定
   const rig = new THREE.Group();
   rig.name = 'rig';
   scene.add(rig);
-  // 向心力演示仪是一台整机：底座、转盘、曲柄、测力弹簧必须一起动
   draggable(rig, { plane: 'floor', canDrag: () => getState().stage === 'setup' });
 
-  // 底座 + 立轴 + 转盘
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.03, 0.18), mat('plasticBlack'));
-  base.position.y = 0.015;
-  rig.add(base);
-  // 主光在右前上方，转盘的影子落到背后被自己挡住 → 补一块接触阴影，否则整台仪器像浮在台面上
-  const ao = contactShadow(0.15, 0.5);
-  ao.position.set(0, 0.002, 0.01);
+  // glb 拿不到时至少要有底座和两根立柱：否则两根横臂会凭空悬在半空
+  const fallbackRig = () => {
+    const g = new THREE.Group();
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.096, 0.20), mat('paintBlue'));
+    slab.position.y = 0.048;
+    g.add(slab);
+    for (const sx of [-1, 1]) {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.30, 20), mat('plasticBlack'));
+      col.position.set(sx * COL_X, 0.15, 0);
+      g.add(col);
+    }
+    return g;
+  };
+  const model = await loadOrFallback('centripetal', fallbackRig);
+  rig.add(model.root);
+
+  const ao = contactShadow(0.24, 0.55);
+  ao.position.set(0, 0.002, 0);
   rig.add(ao);
 
-  const PLATE_Y = 0.046; // 盘面高度
-  const DISC_R = 0.16;
-  const disc = new THREE.Mesh(new THREE.CylinderGeometry(DISC_R, DISC_R, 0.008, 64), mat('aluminumMatte'));
-  disc.position.y = PLATE_Y;
-  disc.castShadow = true;
-  rig.add(disc);
-  const discAnchor = addAnchor(disc, '转盘 r_max = 160 mm', undefined, new THREE.Vector3(0, 0.062, 0));
+  // ---------- 两条横臂（朝外，随各自转轴同步旋转）----------
+  const armL = buildArm();
+  const armR = buildArm();
+  armL.g.position.set(-COL_X, 0, 0);
+  armR.g.position.set(COL_X, 0, 0);
+  rig.add(armL.g, armR.g);
+  const arms = [armL, armR];
 
-  // 外缘滚花环（真实转盘边缘是翻边 + 滚花）
-  const rimRing = new THREE.Mesh(new THREE.TorusGeometry(DISC_R - 0.0015, 0.0018, 8, 96), mat('steel', { color: 0x9aa4ad }));
-  rimRing.rotation.x = Math.PI / 2;
-  rimRing.position.y = PLATE_Y + 0.004;
-  rig.add(rimRing);
+  const ballAnchor = addAnchor(armL.ball, '钢球 m = 100 g');
 
-  // 随盘旋转：径向滑槽 + 毫米刻度 + 配重 + 游标
-  const rotor = new THREE.Group();
-  rig.add(rotor);
-  const slot = new THREE.Mesh(new THREE.BoxGeometry(DISC_R - 0.028, 0.0025, 0.011), mat('plasticBlack', { roughness: 0.8 }));
-  slot.position.set(0.014 + (DISC_R - 0.028) / 2, PLATE_Y + 0.0045, 0);
-  rotor.add(slot);
-  const tickMatR = new THREE.MeshBasicMaterial({ color: 0x33404d });
-  for (let i = 3; i <= 15; i++) {
-    const t = new THREE.Mesh(new THREE.BoxGeometry(0.0008, 0.0005, i % 5 === 0 ? 0.009 : 0.005), tickMatR);
-    t.position.set(i * 0.01, PLATE_Y + 0.0062, 0.011);
-    rotor.add(t);
-  }
-  const counterweight = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.012, 20), mat('brass'));
-  counterweight.position.set(-0.06, PLATE_Y + 0.010, 0);
-  counterweight.castShadow = true;
-  rotor.add(counterweight);
-  const cursor = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.0016, 0.02), mat('plasticRed', { emissive: 0x330000 }));
-  cursor.position.set(0.08, PLATE_Y + 0.0075, 0);
-  rotor.add(cursor);
-
-  // 中心轴座 + 锁紧螺钉
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.024, 0.014, 28), mat('aluminum'));
-  hub.position.y = PLATE_Y + 0.007;
-  hub.castShadow = true;
-  rig.add(hub);
-  const setScrew = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.007, 12), mat('steel', { color: 0x8b949e }));
-  setScrew.rotation.z = Math.PI / 2;
-  setScrew.position.set(0.024, PLATE_Y + 0.008, 0);
-  rig.add(setScrew);
-
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.06, 14), mat('steel'));
-  shaft.position.y = 0.02;
-  rig.add(shaft);
-
-  // 中心数显：实时显示径向拉力 F = mω²r（器材面板读数，不走 2 s 悬停）
-  const dialPost = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.036, 10), mat('steel', { color: 0x9aa4ad }));
-  dialPost.position.set(0, PLATE_Y + 0.03, 0.012);
-  rig.add(dialPost);
-  const dialBox = new THREE.Mesh(new THREE.BoxGeometry(0.054, 0.022, 0.008), mat('plasticBlack'));
-  dialBox.position.set(0, PLATE_Y + 0.052, 0.012);
-  dialBox.castShadow = true;
-  rig.add(dialBox);
-  const forcePlate = textPlate(0.049, 0.017, 'F = -- N', { fontSize: 92 });
-  forcePlate.mesh.position.set(0, PLATE_Y + 0.052, 0.0165);
+  // ---------- 数显：嵌在底座前面板的力读数 ----------
+  // 注意坐标系：glb 里的 (x, y, z) 经 Y-up 转换后是 three 的 (x, z, -y)。
+  // 机身正面在 Blender 是 -Y，到 three 里就是 **+Z**；贴片保持默认朝向即可，
+  // 一旦按 Blender 坐标把 y 写成负数，贴片会躺平朝下、被背面剔除掉（读数直接消失）。
+  const forcePlate = textPlate(0.100, 0.021, 'F = 0.00 N', { fontSize: 72 });
+  // 控制盒从底座前脸伸出 18 mm，盒前玻璃面在 Blender y=-0.1315 → three z=+0.1315
+  forcePlate.mesh.position.set(0, 0.056, 0.1318);
   rig.add(forcePlate.mesh);
-  const dialAnchor = addAnchor(dialBox, '径向测力计 F = mω²r', undefined, new THREE.Vector3(0, 0.014, 0.01));
+  const dialMark = new THREE.Object3D();
+  dialMark.position.set(0, 0.056, 0.1318);
+  rig.add(dialMark);
+  const dialAnchor = addAnchor(dialMark, '向心力读数 F = mω²r', undefined, new THREE.Vector3(0, 0.030, 0));
 
-  // 手柄：摇臂伸出转盘外，握柄竖直
-  const crank = new THREE.Group();
-  const crankArm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.008, 0.014), mat('steel', { color: 0x9aa4ad }));
-  crankArm.position.set(-0.08, 0, 0);
-  crank.add(crankArm);
-  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.03, 12), mat('plasticRed'));
-  knob.position.set(-0.155, 0.015, 0);
-  crank.add(knob);
-  crank.position.set(0, 0.052, 0);
-  rig.add(crank);
-
-  // ---------- 小球 + 螺旋弹簧 ----------
-  const BALL_R = 0.012;
-  const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 24, 18), mat('steel', { roughness: 0.22 }));
-  ball.castShadow = true;
-  rig.add(ball);
-  const ballAnchor = addAnchor(ball, '小球 m = 100 g');
-
-  // 原来这里是一根 φ6 的实心"钢棍"，看着不像器材；真实向心力演示器是
-  // 滑槽里的一根拉伸弹簧，所以改成 26 圈螺旋弹簧，只沿轴向伸缩。
-  const COILS = 18;
-  const spring = new THREE.Group();
-  // 深色发黑弹簧：盘面是浅铝色，亮银弹簧会和盘面糊成一片看不见
-  const coilMat = mat('steel', { color: 0x6f7a86, roughness: 0.34 });
-  const ringGeo = new THREE.TorusGeometry(0.004, 0.0006, 6, 16);
-  for (let i = 0; i < COILS; i++) {
-    const ring = new THREE.Mesh(ringGeo, coilMat);
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = i / (COILS - 1);
-    ring.castShadow = true;
-    spring.add(ring);
-  }
-  rig.add(spring);
-
-  const UP = new THREE.Vector3(0, 1, 0);
-  const dir = new THREE.Vector3();
   let angle = 0;
   let lastRun = -1;
   let prog = 0;
@@ -155,26 +226,37 @@ export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void
 
   const layout = () => {
     const st = getState();
-    const r = Math.max(0.03, st.radius);
-    const y = PLATE_Y + 0.006 + BALL_R; // 球心：盘面 + 槽深 + 球半径
-    dir.set(Math.cos(angle), 0, Math.sin(angle));
-    ball.position.set(dir.x * r, y, dir.z * r);
-    rotor.rotation.y = -angle;
-    counterweight.position.set(-r * 0.82, PLATE_Y + 0.010, 0);
-    cursor.position.set(r, PLATE_Y + 0.0075, 0);
+    const r = THREE.MathUtils.clamp(st.radius, R_MIN, R_MAX);
 
-    // 弹簧从轴座外缘拉到球面：长度随半径变，圈距随之变化
-    const startR = 0.024;
-    const sLen = Math.max(0.012, r - BALL_R - startR);
-    spring.position.set(dir.x * startR, y, dir.z * startR);
-    spring.quaternion.setFromUnitVectors(UP, dir);
-    spring.scale.set(1, sLen, 1);
+    // 两臂左右镜像摆动（交叉皮带驱动的两轴就是反向转）：
+    // 写成同向会变成"一根长杆穿过两柱"，两颗球在中线会合，看着像横臂断了。
+    armL.g.rotation.y = Math.PI - angle;
+    armR.g.rotation.y = angle;
 
-    // 布置参数变化 → 器材标签与读数同步
-    setAnchorText(discAnchor, `转盘 r_max = 160 mm · ω = ${st.omega.toFixed(1)} rad/s`);
-    setAnchorText(ballAnchor, `小球 m = ${(st.mass * 1000).toFixed(0)} g · r = ${(r * 1000).toFixed(0)} mm`);
-    setAnchorText(dialAnchor, `径向测力计 F = mω²r = ${measuredForce(st).toFixed(2)} N`);
-    forcePlate.setText(st.stage === 'setup' ? 'F = -- N' : `F = ${measuredForce(st).toFixed(2)} N`);
+    // 球半径随质量变：同种钢材，m ∝ R³
+    const ballR = BALL_R0 * Math.cbrt(Math.max(0.2, st.mass / 0.1));
+    const ramp = st.stage === 'setup' ? 0 : Math.min(1, prog / 0.25);
+    const F = ramp * measuredForce(st);
+
+    for (const a of arms) {
+      a.slider.position.set(r, ARM_Y, 0);
+      a.ball.scale.setScalar(ballR / BALL_R0);
+      // 球心就在滑块原点，球底压在臂面上：换质量时只是球变大，球心高度随之上抬
+      a.ball.position.y = ARM_H / 2 + ballR;
+      // 拉线：从套筒外端拉到球座内沿，长度随 r 变化（r 最小时几乎看不见）
+      const x0 = LINE_X0;
+      const x1 = r - 0.010;
+      const len = Math.max(0.0008, x1 - x0);
+      a.line.scale.x = len;
+      a.line.position.x = x0 + len / 2;
+    }
+
+    forcePlate.setText(`F = ${F.toFixed(2)} N`);
+    setAnchorText(dialAnchor, st.stage === 'setup' ? '向心力读数 F = 0.00 N（未转动）' : `向心力读数 F = ${F.toFixed(2)} N`);
+    setAnchorText(
+      ballAnchor,
+      `钢球 m = ${(st.mass * 1000).toFixed(0)} g · r = ${(r * 1000).toFixed(0)} mm · ω = ${st.omega.toFixed(1)} rad/s`,
+    );
   };
 
   onTick((dt) => {
@@ -184,19 +266,21 @@ export function buildL6Scene(api: SceneApi, getState: () => L6State): () => void
       prog = 0;
       done = false;
       angle = 0;
-      layout();
     }
     if (st.stage === 'run' && !done) {
       angle += st.omega * dt;
       prog = Math.min(1, prog + dt * 1.2);
       st.onProgress(prog);
-      if (prog >= 1) { done = true; st.onFinish(); }
+      if (prog >= 1) {
+        done = true;
+        st.onFinish();
+      }
     }
     layout();
   });
 
   layout();
-  // 小器材（φ320 转盘）需要俯一点才看得见盘面，偏航让立轴和游标表都露出侧面
-  setTarget(fitCamera(camera, boxOfSubject(scene), { pitch: 30, yaw: 0.34, fill: 0.86, margin: 0.02 }));
+  // 整机 428×240×311 mm：俯 17° 才能同时看到塔轮阶梯、臂侧刻度和底座前面板
+  setTarget(fitCamera(camera, boxOfSubject(scene), { pitch: 13, yaw: 0.30, fill: 0.9, margin: 0.02 }));
   return () => {};
 }
