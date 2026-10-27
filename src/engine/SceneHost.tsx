@@ -1,5 +1,6 @@
 // three.js 场景容器：渲染循环 + 轨道控制 + 拾取标注 + 矢量箭头
-// 交互定案：左键拖拽=旋转视角（器材不可拖动）/ 中键=平移 / 滚轮=朝光标缩放 / 悬停 2 s 出标注
+// 交互定案：左键拖拽=旋转视角（器材不可拖动）/ 空格+左键、中键=平移（右键会被浏览器手势抢，仅作兜底）
+//           / 滚轮=朝光标缩放 / 悬停 2 s 出标注
 // 渲染：真实投影（接触阴影）+ RoomEnvironment 环境光照，器材不再"浮"在台面上
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
@@ -132,7 +133,9 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
     // 滚轮朝光标缩放：光标指着弹簧就放大弹簧，不用先平移再缩
     controls.zoomToCursor = true;
     controls.screenSpacePanning = false;
-    // 左键按住拖动 = 旋转器材（唯一的主交互）；平移留给右键/中键，滚轮缩放
+    // 左键按住拖动 = 旋转器材（唯一的主交互）；平移留给中键 / 右键 / 空格+左键，滚轮缩放。
+    // 右键那条会被浏览器手势抢（见「画布手势隔离」），所以入口按可靠性排序：
+    // 空格+左键 > 中键 > 右键，LEFT 的 PAN 由 syncLeftButton 按空格状态动态切。
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
@@ -245,8 +248,22 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
     let pending: Pending | null = null;
     let suppressClick = false;
 
+    // ---------- 平移键位状态（细节见下方「画布手势隔离」） ----------
+    // 右键平移在浏览器层不可靠：Edge 的鼠标手势、360/QQ 浏览器自带的右键手势、
+    // 触摸屏长按，都是浏览器 UI 层实现，页面既收不全事件，preventDefault 也拦不住。
+    // 所以第三条入口是「空格 + 左键」——只用左键，任何浏览器都抢不走。
+    let spaceHeld = false;
+    let pointerInside = false;
+    /** 右键按下的时刻（0 = 没按下）：用来判断拖动是否被浏览器手势接管 */
+    let rightPressAt = 0;
+
+    const syncLeftButton = () => {
+      controls.mouseButtons.LEFT = spaceHeld ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return; // 中键/右键只做导航
+      if (spaceHeld) return; // 空格+左键 = 平移，不参与器材拖拽
       if (dragRoots.size === 0) return; // 拖拽已停用：不做求交，左键直接交给相机
       const hits = toNdc(e);
       const root = rootOf(hits[0]?.object);
@@ -494,6 +511,79 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
     mount.style.touchAction = 'none';
     mount.style.overscrollBehavior = 'contain';
 
+    // 中键松开会派发 auxclick（Windows 上进入自动滚动模式 / 打开新标签），画布上必须吃掉
+    const onAuxClick = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
+    renderer.domElement.addEventListener('auxclick', onAuxClick);
+
+    /**
+     * 空格 + 左键 = 平移。
+     *
+     * 为什么不复用 Shift：Shift + 左键拖器材本来就是「只改高度」的语义（见 onPointerMove），
+     * 再拿它做平移会和器材操作打架。空格是 Figma / Blender 的通行做法，且不动鼠标键。
+     * 只在指针位于画布内时才接管空格——抽屉里的滑杆、按钮仍可正常用键盘操作。
+     */
+    const setSpace = (on: boolean) => {
+      if (spaceHeld === on) return;
+      spaceHeld = on;
+      syncLeftButton();
+      mount.style.cursor = on ? 'grab' : '';
+    };
+    const onSpaceKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return;
+      if (!pointerInside) return;
+      if (e.type === 'keydown') {
+        e.preventDefault(); // 否则空格会滚抽屉、或激活上一次点过的按钮
+        setSpace(true);
+      } else {
+        setSpace(false);
+      }
+    };
+    window.addEventListener('keydown', onSpaceKey);
+    window.addEventListener('keyup', onSpaceKey);
+
+    const onNavEnter = () => { pointerInside = true; };
+    const onNavLeave = () => { pointerInside = false; setSpace(false); };
+    renderer.domElement.addEventListener('pointerenter', onNavEnter);
+    renderer.domElement.addEventListener('pointerleave', onNavLeave);
+
+    // 中键默认是「自动滚动」，右键在 Windows 上还可能触发拖拽 / 辅助点击：按下瞬间掐掉
+    const onNavDown = (e: PointerEvent) => {
+      if (e.button === 1 || e.button === 2) e.preventDefault();
+      if (e.button === 2) rightPressAt = performance.now();
+    };
+    const onNavUp = (e: PointerEvent) => { if (e.button === 2) rightPressAt = 0; };
+
+    let hinted = false;
+    const hintOnce = (text: string) => {
+      if (hinted) return;
+      hinted = true;
+      window.dispatchEvent(new CustomEvent('labboom:hint', { detail: { text } }));
+    };
+
+    /**
+     * 右键拖动被浏览器手势接管时，页面只会收到 pointercancel——没有 pointerup，
+     * 抬起坐标也永远收不到。这就是「按住右键拖动仍然出现手势」的成因：
+     * 手势跑在浏览器 UI 层，网页没有权限取消它。这里只做一次性提示，把用户导到
+     * 空格+左键 / 中键上，而不是继续在右键上做无用功。
+     */
+    const onNavCancel = () => {
+      if (!rightPressAt) return;
+      rightPressAt = 0;
+      // 既然手势把右键抢走了，就把右键平移摘掉：否则浏览器跑手势的同时相机也在平移，
+      // 页面会跟着一起动，比"右键没反应"更让人困惑。刷新即恢复（不写存储——
+      // 换浏览器或关掉手势扩展后仍是完整体验）。
+      controls.mouseButtons.RIGHT = null as unknown as THREE.MOUSE;
+      hintOnce('右键拖动被浏览器手势接管 · 右键平移已关闭，请用空格 + 左键或中键平移');
+    };
+    const onWindowBlur = () => { setSpace(false); rightPressAt = 0; };
+    renderer.domElement.addEventListener('pointerdown', onNavDown);
+    renderer.domElement.addEventListener('pointerup', onNavUp);
+    renderer.domElement.addEventListener('pointercancel', onNavCancel);
+    window.addEventListener('blur', onWindowBlur);
+
     const api: SceneApi = { scene, camera, addAnchor, setAnchorText, pick, onTick, draggable, enableDrag, focusOn, setTarget, refit };
     // 调试口：自检脚本据此读相机/拖拽表，做局部特写与「器材是否可拖」的自动化验证
     (window as unknown as Record<string, unknown>).__labboomScene = {
@@ -572,6 +662,15 @@ export function SceneHost({ setup, dark = true }: SceneHostProps) {
       renderer.domElement.removeEventListener('dragstart', onDragStart);
       renderer.domElement.removeEventListener('selectstart', onSelectStart);
       renderer.domElement.removeEventListener('wheel', onWheel);
+      renderer.domElement.removeEventListener('auxclick', onAuxClick);
+      renderer.domElement.removeEventListener('pointerenter', onNavEnter);
+      renderer.domElement.removeEventListener('pointerleave', onNavLeave);
+      renderer.domElement.removeEventListener('pointerdown', onNavDown);
+      renderer.domElement.removeEventListener('pointerup', onNavUp);
+      renderer.domElement.removeEventListener('pointercancel', onNavCancel);
+      window.removeEventListener('keydown', onSpaceKey);
+      window.removeEventListener('keyup', onSpaceKey);
+      window.removeEventListener('blur', onWindowBlur);
       window.removeEventListener('keydown', onKey);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown, { capture: true });
       renderer.domElement.removeEventListener('pointermove', onPointerMove, { capture: true });

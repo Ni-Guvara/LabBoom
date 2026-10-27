@@ -23,6 +23,9 @@ export interface LabFrameProps {
 
 type Tab = 'ops' | 'data' | 'chart' | 'conclusion';
 
+/** 舞台左下角的常驻操作提示；引擎检测到右键手势冲突时会临时改写（见 SceneHost 的 hintOnce） */
+const NAV_HINT = '左键拖动旋转 · 滚轮缩放 · 空格+左键 / 中键平移';
+
 export function LabFrame({
   labId, step, onStep, stage, panel, dataArea, conclusion, chart, toolbar,
 }: LabFrameProps) {
@@ -52,6 +55,24 @@ export function LabFrame({
       else await wrapRef.current?.requestFullscreen();
     } catch { /* 无用户手势或被 iframe 策略拒绝时保持原状 */ }
   };
+
+  // 交互提示：默认常驻文案，引擎发现「右键被浏览器手势接管」时改写 6 s 后复原
+  const [hint, setHint] = useState(NAV_HINT);
+  useEffect(() => {
+    let timer = 0;
+    const onHint = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (!text) return;
+      setHint(text);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setHint(NAV_HINT), 6000);
+    };
+    window.addEventListener('labboom:hint', onHint);
+    return () => {
+      window.removeEventListener('labboom:hint', onHint);
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   // 抽屉占宽同步给 3D 引擎：让取景中心落在没被挡住的区域（见 SceneHost 的 applyInset）
   useEffect(() => {
@@ -111,7 +132,7 @@ export function LabFrame({
         <div style={stepDock}>
           <StepBar steps={steps} current={step} done={done} onJump={onStep} />
         </div>
-        <div className="en-up" style={hoverHint}>左键拖动旋转 · 滚轮缩放 · 右键平移</div>
+        <div className="en-up" style={hoverHint}>{hint}</div>
       </div>
     </div>
   );
