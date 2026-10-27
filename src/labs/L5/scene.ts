@@ -25,12 +25,58 @@ export const FLIGHT_Z = -0.05; // 球飞行的竖直平面（glb 斜槽中线）
 /** 斜槽几何：折弯点 → 顶端，与 build_throw.py 的 CHUTE_X1 / RAMP_TOP 同源 */
 const KNEE = { x: -0.205, y: 0.255 };
 const TOP = { x: -0.32, y: 0.402 };
-const LEVEL_LEN = KNEE.x - EXIT_X; // 0.115 水平导出段
+// 注意方向：x 朝负方向变远，EXIT_X(−0.09) 在 KNEE.x(−0.205) 的右边，
+// 所以长度必须写 EXIT_X − KNEE.x（= +0.115）。写成 KNEE.x − EXIT_X 会得到负数，
+// 滚落行程被算成 −0.0008 m，球就只在释放点附近抖一下再瞬移到出口。
+const LEVEL_LEN = EXIT_X - KNEE.x; // 0.115 水平导出段
 const RAMP_DX = KNEE.x - TOP.x;
 const RAMP_DY = TOP.y - KNEE.y;
 const RAMP_SIN = RAMP_DY / Math.hypot(RAMP_DX, RAMP_DY); // ≈0.787，52°
 
-const ROLL_T = 0.3; // 球从释放点滚到出口的过场时间（纯视觉，不参与读数）
+/**
+ * 滚落段的运动学常数。
+ *
+ * 不能再用"固定过场时间 + 位置按 t² 硬凑"的写法：那样斜槽和水平导出段共用同一条
+ * 加速曲线，水平段也会一路加速，到出口时速度最大，接着平抛又按 v₀ 重新起步——
+ * 观感就是"在斜面上慢慢爬、进平轨猛冲、出槽时一顿"，和物理对不上。
+ *
+ * 真实情况是两段：
+ *   斜槽上  s = ½at²，a = η·g·sinθ，末速 v = a·t₁ = √(2ηgh)（与 v0Of 同式，
+ *           所以出槽速度与平抛初速天然相等，视觉连续）；
+ *   水平段  无水平外力 → 匀速 v，耗时 LEVEL_LEN / v。
+ * 两段耗时都随释放高度变（h 大则滚得久），加起来才是这段过场的真实时长。
+ */
+const ROLL_ETA = 0.8; // 与 v0Of 共用同一个损耗系数，保证末速恰好等于 v₀
+const RAMP_A = ROLL_ETA * G * RAMP_SIN; // 沿斜槽的加速度 ≈ 6.2 m/s²
+
+export interface RollTiming {
+  v: number; // 出槽速度（= 平抛初速）
+  l1: number; // 斜槽上走过的路径长
+  t1: number; // 斜槽段耗时
+  t2: number; // 水平导出段耗时
+  total: number; // 滚落总耗时
+}
+
+/** 由释放高度算出滚落两段的路程与时间（纯运动学，与帧率无关） */
+export function rollTiming(h: number, v0 = v0Of({ releaseH: h })): RollTiming {
+  const l1 = Math.max(0.02, h) / RAMP_SIN;
+  const t1 = v0 / RAMP_A; // 0 → v 的匀加速耗时，等价于 √(2l1/a)
+  const t2 = LEVEL_LEN / v0; // 水平段匀速
+  return { v: v0, l1, t1, t2, total: t1 + t2 };
+}
+
+/** 滚落段某一时刻的球心位置（斜槽匀加速 → 水平段匀速） */
+export function rollPose(clock: number, h: number, v0 = v0Of({ releaseH: h })) {
+  const roll = rollTiming(h, v0);
+  const t = Math.min(Math.max(0, clock), roll.total);
+  const rel = releasePoint(h);
+  if (t <= roll.t1) {
+    const s = 0.5 * RAMP_A * t * t; // 沿斜面已走路程
+    const k = roll.l1 > 1e-6 ? Math.min(1, s / roll.l1) : 1;
+    return { x: rel.x + (KNEE.x - rel.x) * k, y: rel.y + (KNEE.y - rel.y) * k, onRamp: true };
+  }
+  return { x: KNEE.x + Math.min(LEVEL_LEN, roll.v * (t - roll.t1)), y: Y0, onRamp: false };
+}
 
 export interface L5Params {
   releaseH: number; // 斜槽上释放高度
@@ -241,6 +287,8 @@ export async function buildL5Scene(api: SceneApi, getState: () => L5State): Prom
     const h = st.releaseH;
     const v0 = v0Of(st);
     const rel = releasePoint(h);
+    const roll = rollTiming(h, v0);
+    const tRoll = roll.total;
 
     if (st.stage === 'setup') {
       // 布置态：球停在释放点，读数清零
@@ -250,30 +298,19 @@ export async function buildL5Scene(api: SceneApi, getState: () => L5State): Prom
       return;
     }
 
-    if (!st.paused) clock = Math.min(ROLL_T + tf, clock + dt * st.speed);
+    if (!st.paused) clock = Math.min(tRoll + tf, clock + dt * st.speed);
     if (st.stepToken !== lastStep) {
       lastStep = st.stepToken;
-      clock = Math.min(ROLL_T + tf, clock + STROBE);
+      clock = Math.min(tRoll + tf, clock + STROBE);
     }
 
-    // 滚落段：沿斜槽加速滑到出口（纯视觉过场，不产生频闪点）
-    const rollT = Math.min(clock, ROLL_T);
-    const p = rollT / ROLL_T;
-    const s = p * p * (h / RAMP_SIN + LEVEL_LEN);
-    const l1 = h / RAMP_SIN;
-    let bx: number;
-    let by: number;
-    if (s < l1 && l1 > 1e-6) {
-      const k = s / l1;
-      bx = rel.x + (KNEE.x - rel.x) * k;
-      by = rel.y + (KNEE.y - rel.y) * k;
-    } else {
-      bx = KNEE.x + Math.min(LEVEL_LEN, s - l1);
-      by = Y0;
-    }
+    // 滚落段：斜槽匀加速 → 水平导出段匀速（不产生频闪点，只做视觉过场）
+    const pose = rollPose(Math.min(clock, tRoll), h, v0);
+    let bx = pose.x;
+    let by = pose.y;
 
-    const t = Math.max(0, clock - ROLL_T); // 离槽后的飞行时间
-    if (clock > ROLL_T) {
+    const t = Math.max(0, clock - tRoll); // 离槽后的飞行时间
+    if (clock > tRoll) {
       bx = EXIT_X + v0 * t;
       by = Math.max(LAND_Y, Y0 - 0.5 * G * t * t); // 落到接球槽后停住
     }
@@ -288,7 +325,7 @@ export async function buildL5Scene(api: SceneApi, getState: () => L5State): Prom
     );
 
     // 频闪点：只在离槽之后留，x 从出口起算
-    if (clock > ROLL_T) {
+    if (clock > tRoll) {
       while (shot * STROBE <= t + 1e-9 && shot < 20) {
         const tt = shot * STROBE;
         const d = new THREE.Mesh(dotGeo, dotMat);
@@ -299,7 +336,7 @@ export async function buildL5Scene(api: SceneApi, getState: () => L5State): Prom
       }
     }
 
-    if (st.stage === 'run' && clock >= ROLL_T + tf - 1e-9 && !finished) {
+    if (st.stage === 'run' && clock >= tRoll + tf - 1e-9 && !finished) {
       finished = true;
       st.onFinish();
     }
