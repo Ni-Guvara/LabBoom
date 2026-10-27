@@ -36,18 +36,18 @@ export function measuredForce(p: L6Params): number {
 // 塔轮顶 PULLEY_TOP = 0.1655，皮带 BELT_Z = 0.1383 —— 本文件只需要横臂以上的尺寸。
 // 底座顶面 BASE_TOP = 0.108（箱式铸件：22 mm 顶盖 + 78 mm 方腿 + 8 mm 地脚），
 // 塔轮顶 PULLEY_TOP = 0.1655，皮带 BELT_Z = 0.1383 —— 本文件只需要横臂以上的尺寸。
-const COL_X = 0.13; // 两立柱轴线（x = ±COL_X）
-const ARM_Y = 0.176; // 横臂中心高度 = glb 抱箍高度（塔轮顶 0.144 + 柱脚弹簧 23 mm）
-// 横臂横跨立柱：**内侧段长 0.110**（球座沿它滑到 r = 80 mm，臂端离中线只剩 20 mm），
+const COL_X = 0.151; // 两立柱轴线（x = ±COL_X），与 glb 的 COL_X 一致
+const ARM_Y = 0.209; // 横臂中心高度 = glb 抱箍高度（塔轮顶 0.178 + 柱脚弹簧 23 mm）
+// 横臂横跨立柱：**内侧段长 0.135**（球座沿它滑到 r = 80 mm，臂端离中线只剩 16 mm），
 // 外侧只留 0.050 的短尾装斜撑和配平。
 // 参考件正是这样：两颗球都落在两柱之间的中缝附近，而不是各挂在两端。
-// 两臂反向转动且始终关于中面对称，内侧端永远相距 40 mm，不会打架。
-const ARM_IN = 0.110; // 内侧（朝中线）长段
+// 两臂同向转动，两尖端 x 差恒为柱距 302 mm，永不打架。
+const ARM_IN = 0.135; // 内侧（朝中线）长段：两臂内侧端只剩 32 mm 缝
 const ARM_OUT = 0.050; // 外侧短尾
 const ARM_H = 0.016; // 臂厚
 const ARM_W = 0.040; // 臂宽（进深）—— 必须 < 抱箍 Ø43，臂才能从箍里穿出
-const HUB_R = 0.0215; // 转轴座半径（包住 Ø26 立柱）
-const LINE_X0 = 0.024; // 拉线起点：轴座外壁
+const HUB_R = 0.0180; // 转轴座半径（包住 Ø26 立柱，留 5 mm 壁）
+const LINE_X0 = 0.020; // 拉线起点：轴座外壁
 const R_MIN = 0.040; // 球座最近：球内缘 0.025，越过轴座 0.0215
 const R_MAX = 0.080; // 球座最远：滑块外沿 0.106 < 臂端 0.110
 const BALL_R0 = 0.017; // m = 100 g 时的钢球半径（Ø34）
@@ -58,10 +58,9 @@ function buildArm() {
   // 臂身单独一份哑光黑：plasticBlack 的镜面偏亮，臂顶面朝主光会整条泛白，
   // 远看像在横臂上贴了一条白胶带。
   const black = new THREE.MeshStandardMaterial({ color: 0x1b1d22, roughness: 0.66, metalness: 0.22 });
-  const steel = mat('steel', { roughness: 0.24 });
-  const tickMat = new THREE.MeshBasicMaterial({ color: 0xd7dee6 });
+  const steel = mat('steel', { roughness: 0.18, metalness: 1.0 });
+  const tickMat = new THREE.MeshBasicMaterial({ color: 0x9aa2ab });
   const inkMat = new THREE.MeshBasicMaterial({ color: 0x2b3038 });
-  const redMat = mat('plasticRed', { emissive: 0x330000 });
 
   // 臂身横跨立柱：外侧长段给球座走行程，内侧留一小段带刻度和斜撑。
   // 参考件正是这个比例——刻度画在靠柱的一段，球在臂上滑动读半径。
@@ -90,7 +89,7 @@ function buildArm() {
   for (const sz of [-1, 1]) {
     for (let i = -5; i <= 12; i++) {
       const major = i % 5 === 0;
-      const t = new THREE.Mesh(new THREE.BoxGeometry(0.0012, major ? 0.014 : 0.009, 0.0006), tickMat);
+      const t = new THREE.Mesh(new THREE.BoxGeometry(0.0010, major ? 0.011 : 0.007, 0.0006), tickMat);
       t.position.set(-i * 0.01, ARM_Y + (major ? 0.001 : 0), sz * (ARM_W / 2 + 0.0004));
       g.add(t);
     }
@@ -106,57 +105,52 @@ function buildArm() {
   lockScrew.position.set(0, ARM_Y + 0.006, -(HUB_R + 0.002));
   g.add(lockScrew);
 
-  // ---------- 球座：骑在臂上的滑块 + 外侧立板 + 顶部鞍形挡块 ----------
-  // 参考件的关键特征：钢球贴在立板的**立柱侧**，立板顶部那块「两翼上翘、中间
-  // 下凹」的鞍形件从上方兜住球，侧面两颗银色压紧螺柱。早前做成"小塔 + 圆托环"，
-  // 读出来是一颗球放在烛台上，完全没有测力环压头的意思。
+  // ---------- 球座：骑在臂上的滑块 + 厚立板（顶部弧口兜住球） ----------
+  // 参考件的立板是一整块厚铁：底边压在滑块上，右高左低，顶边从右上往左下
+  // 弯出一道弧，弧尖压住球的上沿——「鞍形」其实就开在这块板的顶边上。
+  // 早前做成「矩形板 + 另扣一片鞍」两件，读出来像板子上搁了个方盒。
   const slider = new THREE.Group();
   // 球座整体沿 x 镜像：立板要落在球的**远离立柱**一侧（参考件就是这样把球夹在
-  // 立板与拉线之间）。立板、鞍片、螺柱都是 x 向偏置的，直接置 scale.x = -1 最省事，
+  // 立板与拉线之间）。立板、螺柱都朝 +x 偏置，直接置 scale.x = -1 最省事，
   // 球本身是球体，镜像对它没有影响。
   slider.scale.x = -1;
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.005, ARM_W + 0.006), black);
-  plate.position.set(0.008, ARM_H / 2 + 0.0025, 0);
+
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.005, ARM_W + 0.004), black);
+  plate.position.set(0.009, ARM_H / 2 + 0.0025, 0);
   plate.castShadow = true;
   slider.add(plate);
-  const post = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.030, ARM_W), black);
-  post.position.set(0.0185, ARM_H / 2 + 0.005 + 0.015, 0);
+
+  // 立板轮廓：一块 18 mm 厚、42 mm 高的板，顶边向左甩出一道 30 mm 长、8 mm 厚的
+  // 钩，钩尖压到球心正上方的球顶。参考件这个「7」字形是整个球座最认得出的特征；
+  // 早前弧太浅、板又宽到 32 mm，正面看就是一块斜切的墓碑。
+  const postShape = new THREE.Shape();
+  postShape.moveTo(0.014, 0);
+  postShape.lineTo(0.032, 0);
+  postShape.lineTo(0.032, 0.042);
+  postShape.quadraticCurveTo(0.004, 0.037, -0.002, 0.030);
+  postShape.lineTo(0.014, 0.024);
+  postShape.lineTo(0.014, 0);
+  const post = new THREE.Mesh(
+    // 进深比钢球还窄 8 mm：球前后各露出一圈，镜头从任一侧斜看都不会被板糊死
+    new THREE.ExtrudeGeometry(postShape, { depth: 0.026, bevelEnabled: true, bevelSize: 0.0010, bevelThickness: 0.0010, bevelSegments: 2 }),
+    black,
+  );
+  post.position.set(0, ARM_H / 2 + 0.005, -0.013);
   post.castShadow = true;
   slider.add(post);
 
-  // 鞍形挡块：底面平、顶面中间下凹两侧上翘 —— 从侧面看就是一个「马鞍」
-  const sadShape = new THREE.Shape();
-  sadShape.moveTo(-0.015, 0);
-  sadShape.lineTo(0.023, 0);
-  sadShape.lineTo(0.023, 0.018);
-  sadShape.quadraticCurveTo(0.004, 0.006, -0.015, 0.018);
-  sadShape.lineTo(-0.015, 0);
-  const saddle = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(sadShape, { depth: ARM_W, bevelEnabled: true, bevelSize: 0.0009, bevelThickness: 0.0009, bevelSegments: 1 }),
-    black,
-  );
-  saddle.position.set(0, ARM_H / 2 + 0.005 + 0.030, -ARM_W / 2);
-  saddle.castShadow = true;
-  slider.add(saddle);
-
   // 立板正面两颗压紧螺柱（参考件上银色螺杆朝观察者支出来，并排一左一右）
-  for (const dx of [0.0130, 0.0240]) {
+  for (const dx of [0.0190, 0.0260]) {
     const stud = new THREE.Mesh(new THREE.CylinderGeometry(0.0028, 0.0028, 0.026, 12), steel);
     stud.rotation.x = Math.PI / 2;
-    stud.position.set(dx, ARM_H / 2 + 0.024, ARM_W / 2 - 0.002);
+    stud.position.set(dx, ARM_H / 2 + 0.012, 0.011);
     slider.add(stud);
     const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.0040, 0.0040, 0.005, 12), steel);
     knob.rotation.x = Math.PI / 2;
-    knob.position.set(dx, ARM_H / 2 + 0.024, ARM_W / 2 + 0.012);
+    knob.position.set(dx, ARM_H / 2 + 0.012, 0.025);
     slider.add(knob);
   }
 
-  // 球座侧面的红色游标线：对着臂侧刻度，读出的就是 r
-  for (const sz of [-1, 1]) {
-    const mk = new THREE.Mesh(new THREE.BoxGeometry(0.0016, 0.012, 0.0007), redMat);
-    mk.position.set(0, ARM_H / 2 + 0.006, sz * (ARM_W / 2 + 0.0026));
-    slider.add(mk);
-  }
 
   // 钢球：球心就在滑块原点，所以 slider.position.x = r 时 r 即真实半径；
   // 球底压在臂面上（y = ARM_H/2 + ballR，随质量变化由 layout() 每帧更新）
@@ -188,12 +182,12 @@ export async function buildL6Scene(api: SceneApi, getState: () => L6State): Prom
   // glb 拿不到时至少要有底座和两根立柱：否则两根横臂会凭空悬在半空
   const fallbackRig = () => {
     const g = new THREE.Group();
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.096, 0.20), mat('paintBlue'));
-    slab.position.y = 0.048;
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.132, 0.20), mat('paintBlue'));
+    slab.position.y = 0.074;
     g.add(slab);
     for (const sx of [-1, 1]) {
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.30, 20), mat('plasticBlack'));
-      col.position.set(sx * COL_X, 0.15, 0);
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.314, 20), mat('plasticBlack'));
+      col.position.set(sx * COL_X, 0.157, 0);
       g.add(col);
     }
     return g;
@@ -221,10 +215,10 @@ export async function buildL6Scene(api: SceneApi, getState: () => L6State): Prom
   // 一旦按 Blender 坐标把 y 写成负数，贴片会躺平朝下、被背面剔除掉（读数直接消失）。
   const forcePlate = textPlate(0.100, 0.021, 'F = 0.00 N', { fontSize: 72 });
   // 控制盒从底座前脸伸出 18 mm，盒前玻璃面在 Blender y=-0.1315 → three z=+0.1315
-  forcePlate.mesh.position.set(0, 0.056, 0.1318);
+  forcePlate.mesh.position.set(0, 0.074, 0.1318);
   rig.add(forcePlate.mesh);
   const dialMark = new THREE.Object3D();
-  dialMark.position.set(0, 0.056, 0.1318);
+  dialMark.position.set(0, 0.074, 0.1318);
   rig.add(dialMark);
   const dialAnchor = addAnchor(dialMark, '向心力读数 F = mω²r', undefined, new THREE.Vector3(0, 0.030, 0));
 
@@ -256,9 +250,10 @@ export async function buildL6Scene(api: SceneApi, getState: () => L6State): Prom
       // 拉线：从套筒外端拉到球座内沿，长度随 r 变化（r 最小时几乎看不见）
       const x0 = -LINE_X0;
       const x1 = -r + 0.010; // 滑块底板朝轴那侧的外沿（底板 36 宽、中心偏 8）
-      const len = Math.max(0.0008, x1 - x0);
+      // 两臂的局部 +x 朝外，球座在 -x 侧，所以 x1 比 x0 更负：长度要取 x0 - x1
+      const len = Math.max(0.0008, x0 - x1);
       a.line.scale.x = len;
-      a.line.position.x = x0 + len / 2;
+      a.line.position.x = (x0 + x1) / 2;
     }
 
     forcePlate.setText(`F = ${F.toFixed(2)} N`);

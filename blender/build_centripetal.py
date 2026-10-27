@@ -32,8 +32,8 @@ from lab_common import (  # noqa: E402
 # ---------- 底座：箱式铸件 ----------
 BASE_L, BASE_W = 0.360, 0.200
 FOOT_H = 0.008
-LEG_H = 0.078                      # 方腿：从地脚到顶盖下沿
-SLAB_H = 0.022                     # 顶盖（出檐 4 mm）
+LEG_H = 0.105                      # 方腿：从地脚到顶盖下沿
+SLAB_H = 0.027                     # 顶盖（出檐 4 mm）
 BASE_TOP = round(FOOT_H + LEG_H + SLAB_H, 4)   # = 0.108 → 塔轮安装面
 SKIRT_H = 0.030
 SKIRT_INSET = 0.011           # 侧裙内收，四角方腿才会凸出来
@@ -43,14 +43,15 @@ LEG_X = BASE_L / 2 - LEG_S / 2 - 0.004
 LEG_Y = BASE_W / 2 - LEG_S / 2 - 0.004
 
 # ---------- 塔轮：五级阶梯，左大右小 ----------
-COL_X = 0.130
+COL_X = 0.151
 # (直径, 该级高)
 # 每级 7.2 mm 高、环宽 7 mm：层高与台阶环宽接近正方，才是车削塔轮的比例。
 # 每级 12 mm 时台阶环被拉成"盘沿"，整只塔轮会读成一摞盘子。
-# 直径按参考件比例定：塔轮最大外径约为底座宽度的 29%（104 mm），
-# 早前做到 176 mm（约半个底座宽），两只塔轮几乎顶到立柱两头，整机比例失真。
-PULLEY_L = [(0.104, 0.0072), (0.096, 0.0072), (0.088, 0.0072), (0.080, 0.0072), (0.072, 0.0072)]
-PULLEY_R = [(0.091, 0.0072), (0.084, 0.0072), (0.077, 0.0072), (0.070, 0.0072), (0.063, 0.0072)]
+# 直径按参考照片实测：左塔轮 Ø137、右塔轮 Ø116，底座宽 360 —— 塔轮直径约为
+# 底座的 38%，而且左右各探出底座边缘约 40 mm（参考件就是这样悬出去的）。
+# 早前做到 Ø176（半个底座宽）时两只塔轮几乎顶到立柱两头，整机变成了"矮胖"。
+PULLEY_L = [(0.137, 0.0075), (0.123, 0.0075), (0.109, 0.0075), (0.095, 0.0075), (0.081, 0.0075)]
+PULLEY_R = [(0.116, 0.0075), (0.104, 0.0075), (0.092, 0.0075), (0.080, 0.0075), (0.068, 0.0075)]
 PULLEY_STEPS = len(PULLEY_L)
 PULLEY_STACK_H = sum(h for _, h in PULLEY_L)
 PULLEY_TOP = round(BASE_TOP + PULLEY_STACK_H, 4)   # = 0.1655
@@ -61,32 +62,33 @@ BELT_R_L = PULLEY_L[BELT_STEP][0] / 2 + 0.0012
 BELT_R_R = PULLEY_R[BELT_STEP][0] / 2 + 0.0012
 
 # ---------- 立柱 + 横臂抱箍 ----------
-COL_R = 0.013
-COL_TOP = 0.284
+COL_R = 0.010
+COL_TOP = 0.314
 SPRING_Z0 = round(PULLEY_TOP + 0.004, 4)
-ARM_Y = 0.176                      # 横臂（= 抱箍）中心高度：塔轮顶 0.144 + 弹簧 23 mm
+ARM_Y = 0.209                      # 横臂（= 抱箍）中心高度：塔轮顶 0.178 + 弹簧 23 mm
 CLAMP_H = 0.012
 SPRING_Z1 = round(ARM_Y - CLAMP_H / 2 - 0.004, 4)
 
 # ---------- 手轮 / 摇把 ----------
-HAND_X, HAND_Y, HAND_Z = 0.150, 0.006, 0.052
-HAND_R = 0.038
+HAND_X, HAND_Y, HAND_Z = 0.152, 0.004, 0.060
+HAND_R = 0.032
 GRIP_X = 0.206
 
 # ---------- 前面板数显窗 ----------
 PANEL_W, PANEL_H = 0.112, 0.030
 PANEL_Y = round(-BASE_W / 2 - 0.0012, 5)
-PANEL_Z = 0.056
+PANEL_Z = 0.074
 
 RED = lambda: mat_pbr("beltRed", 0x8C1A1C, 0.0, 0.78)
-YELLOW = lambda: mat_pbr("paintYellow", 0xCB9A20, 0.0, 0.52, 0.10)
+YELLOW = lambda: mat_pbr("paintYellow", 0xD9A81C, 0.0, 0.55, 0.05)
 WHITE = lambda: mat_pbr("paintWhite", 0xD9DDE1, 0.0, 0.58, 0.25)
 
 
-def cone(name, r0, r1, depth, center, mat, verts=64):
-    """截锥：车削件每级带 1.5 mm 拔模，才不会看成一摞平盘。"""
+def cone(name, r0, r1, depth, center, mat, verts=64, rz=0.0):
+    """截锥：车削件每级带 1.5 mm 拔模，才不会看成一摞平盘。
+    verts=4 + rz=45° 就是一根下大上小的方锥腿 —— 参考件的铸腿正是这个形状。"""
     bpy.ops.mesh.primitive_cone_add(vertices=verts, radius1=r0, radius2=r1, depth=depth,
-                                    location=center)
+                                    location=center, rotation=(0, 0, rz))
     o = bpy.context.active_object
     # 全平面着色：台阶是硬边，而 Blender 的平滑组会把「平滑侧壁 + 平面顶盖」
     # 共边处的顶点法线一起平均，边缘被卷出一道圆角，整只塔轮就读成"一摞甜甜圈"。
@@ -116,7 +118,7 @@ def join_into(name, objs):
     return o
 
 
-def spring_sleeve(name, x, z0, z1, mat, major=0.0172, minor=0.0020, pitch=0.0044):
+def spring_sleeve(name, x, z0, z1, mat, major=0.0195, minor=0.0024, pitch=0.0044):
     """柱脚螺旋弹簧：一叠圆环套在立柱外，近看有螺距感。"""
     objs = [cyl(f"{name}_core", COL_R - 0.0008, z1 - z0 + 0.004, (x, 0, (z0 + z1) / 2), mat, verts=24)]
     n = max(3, int((z1 - z0) / pitch))
@@ -202,8 +204,9 @@ def main():
         for sy in (-1, 1):
             tag = f"{'l' if sx < 0 else 'r'}{'b' if sy > 0 else 'f'}"
             lx, ly = sx * LEG_X, sy * LEG_Y
-            parts.append(box(f"leg_{tag}", (LEG_S, LEG_S, LEG_H), (lx, ly, FOOT_H + LEG_H / 2),
-                             blue, bevel=0.006, segments=3))
+            # 方锥腿：下大上小，正面看是外撇的铸腿，比等截面方块更像砂型铸造
+            parts.append(cone(f"leg_{tag}", LEG_S * 0.72, LEG_S * 0.55, LEG_H,
+                              (lx, ly, FOOT_H + LEG_H / 2), blue, verts=4, rz=math.radians(45)))
             parts.append(box(f"foot_{tag}", (LEG_S - 0.010, LEG_S - 0.010, FOOT_H),
                              (lx, ly, FOOT_H / 2), rubber, bevel=0.002))
     # 顶面四颗内六角螺钉（参考图顶面四颗黑点）
@@ -256,8 +259,8 @@ def main():
     parts.append(rod_between("hand_crank", (HAND_X, HAND_Y, HAND_Z), (HAND_X, crank_y, HAND_Z), 0.0060, black))
     parts.append(rod_between("hand_crank_bend", (HAND_X - 0.004, crank_y, HAND_Z),
                              (HAND_X + 0.012, crank_y, HAND_Z), 0.0060, black))
-    parts.append(cyl("hand_grip", 0.0078, 0.070, (HAND_X + 0.046, crank_y, HAND_Z), rubber, axis="X", verts=18))
-    parts.append(cyl("hand_grip_cap", 0.0096, 0.009, (HAND_X + 0.085, crank_y, HAND_Z), black, axis="X", verts=18))
+    parts.append(cyl("hand_grip", 0.0072, 0.048, (HAND_X + 0.034, crank_y, HAND_Z), rubber, axis="X", verts=18))
+    parts.append(cyl("hand_grip_cap", 0.0090, 0.008, (HAND_X + 0.061, crank_y, HAND_Z), black, axis="X", verts=18))
 
     attach(root, parts)
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
