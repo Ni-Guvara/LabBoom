@@ -142,6 +142,10 @@
       "goal": "测 U-I 数据拟合直线，截距得 E、斜率得 r",
       "examPoints": ["闭合电路欧姆定律","U-I 图像求 E、r"] }
   ],
+  "commerce": {
+    "onSale": ["L1", "L2", "L3", "L4", "L5", "L6", "L7"],
+    "comingSoon": ["L8", "L9", "L10", "L11", "L12"]
+  },
   "demoLabs": [
     { "id": "D1", "name": "打点计时器测速度", "chapter": "M1", "category": "mechanics" },
     { "id": "D3", "name": "静摩擦力变化", "chapter": "M3", "category": "mechanics" },

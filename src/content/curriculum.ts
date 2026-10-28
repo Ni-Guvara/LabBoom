@@ -56,6 +56,12 @@ export interface DemoLab {
   category: string;
 }
 
+/** 商业配置：哪些实验在卖、哪些还没做完（未开放的不进付费守卫，也不出现在选实验页） */
+export interface Commerce {
+  onSale: string[];
+  comingSoon: string[];
+}
+
 export interface Curriculum {
   version: string;
   brand: string;
@@ -65,6 +71,7 @@ export interface Curriculum {
   categories: Category[];
   chapters: Chapter[];
   labs: Lab[];
+  commerce?: Commerce;
   demoLabs: DemoLab[];
 }
 
@@ -72,6 +79,13 @@ export const curriculum = curriculumJson as Curriculum;
 
 export const labById = (id: string): Lab | undefined =>
   curriculum.labs.find((l) => l.id === id);
+
+/** 未配置 commerce 时视为全部在售（兼容旧数据） */
+export const isComingSoon = (id: string): boolean =>
+  curriculum.commerce?.comingSoon.includes(id) ?? false;
+
+export const isOnSale = (id: string): boolean =>
+  curriculum.commerce ? curriculum.commerce.onSale.includes(id) : true;
 
 export const chapterById = (id: string): Chapter | undefined =>
   curriculum.chapters.find((c) => c.id === id);
