@@ -1,7 +1,7 @@
 // 实验入口守卫：无 token / token 无效 / 未开通该实验时，把人送回收款站。
 // VITE_PAY_BASE 未配置时整层透明（开发、离线包、演示构建都不受影响）。
 import { useEffect } from 'react';
-import { PAY_ENABLED, payUrl } from './config';
+import { PAY_ENABLED, payUrl, priceLabel } from './config';
 import { usePayStore } from './store';
 
 export function PayGate({ labId, children }: { labId: string; children: React.ReactNode }) {
@@ -27,7 +27,7 @@ export function PayGate({ labId, children }: { labId: string; children: React.Re
     status === 'ok'
       ? `当前开通的是「${sku === 'year' ? '年卡' : sku}」，这个实验不在权益范围内，正在前往开通页…`
       : status === 'expired'
-        ? '年卡已到期，正在前往续费…'
+        ? `年卡已到期（续费 ${priceLabel('year')}），正在前往续费…`
         : '没有检测到开通凭证，正在前往开通页…';
 
   return <RedirectScreen target={target} desc={desc} />;
