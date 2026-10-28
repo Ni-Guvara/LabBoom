@@ -32,7 +32,10 @@ jobs:
       - run: npm ci
 
       # build = tsc -b && vite build，类型错误会在这里挡住发布
+      # VITE_PAY_BASE 从仓库变量读取；未设置时为空 = 不启用付费守卫（不会误锁死）
       - run: npm run build
+        env:
+          VITE_PAY_BASE: ${{ vars.PAY_BASE }}
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

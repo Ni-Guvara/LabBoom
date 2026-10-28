@@ -1,7 +1,9 @@
 // App：路由 + 顶部导航
 // 用 HashRouter：兼容离线双击 index.html（file://）、刷新与深链均不 404
 import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { useEffect } from 'react';
 import { TopNav } from '@/shell/TopNav';
+import { usePayStore } from '@/pay/store';
 import { SubjectSelectPage } from '@/shell/SubjectSelectPage';
 import { StageSelectPage } from '@/shell/StageSelectPage';
 import { ModuleListPage } from '@/shell/ModuleListPage';
@@ -22,6 +24,12 @@ function ModelRoute() {
 }
 
 export default function App() {
+  // 启动即校验一次开通状态：模块列表要按 sku 显示「未开通」，不能等人点了才查
+  const initPay = usePayStore((s) => s.init);
+  useEffect(() => {
+    void initPay();
+  }, [initPay]);
+
   return (
     <HashRouter>
       <TopNav />

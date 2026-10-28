@@ -2,8 +2,10 @@
 // Hero slogan + 中英双语分类 Tab + 模块卡网格（封面=3D 场景缩略图占位 + 信息条 + 查看实验）
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { curriculum, labById, type Chapter, type Lab } from '@/content/curriculum';
+import { curriculum, labById, isComingSoon, type Chapter, type Lab } from '@/content/curriculum';
 import { useProgressStore } from '@/store/progress';
+import { PAY_ENABLED, payUrl } from '@/pay/config';
+import { usePayStore } from '@/pay/store';
 import { Hero } from './Hero';
 
 export function ModuleListPage() {
@@ -12,6 +14,9 @@ export function ModuleListPage() {
   const isUnlocked = useProgressStore((s) => s.isChapterUnlocked);
   const devUnlockAll = useProgressStore((s) => s.devUnlockAll);
   const setDevUnlockAll = useProgressStore((s) => s.setDevUnlockAll);
+  const payStatus = usePayStore((s) => s.status);
+  const paySku = usePayStore((s) => s.sku);
+  const canOpen = usePayStore((s) => s.canOpen);
   const [cat, setCat] = useState('all');
 
   const chapters = curriculum.chapters.filter((c) => c.stage === stage);
@@ -36,6 +41,19 @@ export function ModuleListPage() {
         <span style={{ fontSize: 13, color: 'var(--c-text-dim)' }}>
           {devUnlockAll ? '演示模式：全部实验已解锁' : '学习次第：完成前置章「概念舱」检查点即自动解锁'}
         </span>
+        {PAY_ENABLED && (
+          <span style={payBadge(payStatus === 'ok')}>
+            {payStatus === 'checking' || payStatus === 'idle'
+              ? '开通状态：校验中…'
+              : payStatus === 'ok'
+                ? `已开通：${paySku === 'year' ? '全站年卡' : paySku}`
+                : payStatus === 'expired'
+                  ? '年卡已到期'
+                  : payStatus === 'offline'
+                    ? '开通状态：校验失败'
+                    : '未开通'}
+          </span>
+        )}
         <button
           className="pill"
           style={{ padding: '6px 14px', fontSize: 12 }}
@@ -61,12 +79,24 @@ export function ModuleListPage() {
       <div style={grid}>
         {visible.map(({ lab, ch }) => {
           const unlocked = isUnlocked(ch.id);
+          // 两把锁：未开放（还没做完，不卖）/ 未开通（没买这一课）；学习次第的锁保持原样
+          const coming = isComingSoon(lab.id);
+          const payOk = !PAY_ENABLED || canOpen(lab.id);
+          const go = () => {
+            if (coming) return;
+            if (!payOk) {
+              location.href = payUrl('/buy/single');
+              return;
+            }
+            nav(unlocked ? `/lab/${lab.id}` : `/cabin/${ch.id}`);
+          };
           return (
             <button
               key={lab.id}
               className="glass"
-              style={{ ...moduleCard, opacity: unlocked ? 1 : 0.65 }}
-              onClick={() => nav(unlocked ? `/lab/${lab.id}` : `/cabin/${ch.id}`)}
+              title={coming ? '该实验还在制作中，暂未开放' : undefined}
+              style={{ ...moduleCard, opacity: coming ? 0.45 : !payOk ? 0.7 : unlocked ? 1 : 0.65, cursor: coming ? 'not-allowed' : 'pointer' }}
+              onClick={go}
             >
               {/* 封面：该实验 three.js 场景的真实截图（scripts/capture-covers.mjs 生成），
                   还没有影棚渲染的关卡回退到线稿风格占位，不拿半成品截图充数 */}
@@ -81,8 +111,14 @@ export function ModuleListPage() {
                 <div style={{ fontSize: 12.5, color: 'var(--c-text-dim)', marginTop: 4, lineHeight: 1.5 }}>{lab.goal}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
                   <span className="en" style={{ color: 'var(--c-text-faint)', fontSize: 13 }}>{lab.formula}</span>
-                  <span style={{ fontSize: 12, color: unlocked ? 'var(--c-accent)' : 'var(--c-warn)' }}>
-                    {unlocked ? '查看实验 →' : `🔒 去概念舱解锁（先过 ${ch.prereq.join('·')}）→`}
+                  <span style={{ fontSize: 12, color: coming ? 'var(--c-text-faint)' : payOk && unlocked ? 'var(--c-accent)' : 'var(--c-warn)' }}>
+                    {coming
+                      ? '未开放 · COMING SOON'
+                      : !payOk
+                        ? '🔒 未开通 · 去开通 →'
+                        : unlocked
+                          ? '查看实验 →'
+                          : `🔒 去概念舱解锁（先过 ${ch.prereq.join('·')}）→`}
                   </span>
                 </div>
               </div>
@@ -136,6 +172,12 @@ const cover = (_cat: string): React.CSSProperties => ({
   borderBottom: '1px solid var(--glass-border)',
 });
 
+const payBadge = (ok: boolean): React.CSSProperties => ({
+  fontSize: 12, padding: '4px 12px', borderRadius: 999,
+  border: `1px solid ${ok ? 'rgba(94,234,212,0.45)' : 'var(--glass-border)'}`,
+  color: ok ? 'var(--c-accent-2, #5eead4)' : 'var(--c-text-faint)',
+  background: ok ? 'rgba(94,234,212,0.10)' : 'transparent',
+});
 const page: React.CSSProperties = { position: 'relative', zIndex: 1, paddingBottom: 80 };
 const unlockBar: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, flexWrap: 'wrap', padding: '0 28px 20px', position: 'relative', zIndex: 1 };
 const tabBar: React.CSSProperties = { display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap', padding: '0 28px 24px', position: 'relative', zIndex: 1 };
